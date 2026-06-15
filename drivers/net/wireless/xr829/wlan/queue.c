@@ -461,7 +461,7 @@ int xradio_queue_put(struct xradio_queue *queue, struct sk_buff *skb,
 		ret = -ENOENT;
 	}
 #if 0
-	txrx_printk(XRADIO_DBG_ERROR, "queue_put queue %d, %d, %d\n",
+	txrx_printk(XRADIO_DBG_ERROR, "queue_put queue %zu, %d, %zu\n",
 		queue->num_queued,
 		queue->link_map_cache[txpriv->if_id][txpriv->link_id],
 		queue->num_pending);
@@ -534,7 +534,7 @@ int xradio_queue_get(struct xradio_queue *queue,
 
 		spin_unlock_bh(&stats->lock);
 #if 0
-		txrx_printk(XRADIO_DBG_ERROR, "queue_get queue %d, %d, %d\n",
+		txrx_printk(XRADIO_DBG_ERROR, "queue_get queue %zu, %d, %zu\n",
 		queue->num_queued,
 		queue->link_map_cache[item->txpriv.if_id][item->txpriv.link_id],
 		queue->num_pending);
@@ -546,7 +546,7 @@ int xradio_queue_get(struct xradio_queue *queue,
 	} else {/*add debug info for warning*/
 		struct xradio_queue_item *item_tmp;
 		txrx_printk(XRADIO_DBG_WARN,
-			"%s, if_id=%d, link_id_map=%08x, queued=%d, pending=%d\n",
+			"%s, if_id=%d, link_id_map=%08x, queued=%zu, pending=%zu\n",
 			__func__, if_id, link_id_map, queue->num_queued_vif[if_id],
 			queue->num_pending_vif[if_id]);
 		list_for_each_entry(item_tmp, &queue->queue, head) {
@@ -625,7 +625,7 @@ int xradio_queue_requeue(struct xradio_queue *queue, u32 packetID, bool check)
 			if_id, link_id);
 		list_move(&item->head, &queue->queue);
 #if 0
-		txrx_printk(XRADIO_DBG_ERROR, "queue_requeue queue %d, %d, %d\n",
+		txrx_printk(XRADIO_DBG_ERROR, "queue_requeue queue %zu, %d, %zu\n",
 		queue->num_queued,
 		queue->link_map_cache[if_id][item->txpriv.link_id],
 		queue->num_pending);
@@ -760,7 +760,7 @@ int xradio_queue_remove(struct xradio_queue *queue, u32 packetID)
 	spin_unlock_bh(&queue->lock);
 
 #if 0
-	txrx_printk(XRADIO_DBG_ERROR, "queue_drop queue %d, %d, %d\n",
+	txrx_printk(XRADIO_DBG_ERROR, "queue_drop queue %zu, %d, %zu\n",
 		queue->num_queued, queue->link_map_cache[if_id][0],
 		queue->num_pending);
 	txrx_printk(XRADIO_DBG_ERROR, "queue_drop stats %d, %d\n",

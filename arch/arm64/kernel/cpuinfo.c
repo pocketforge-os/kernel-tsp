@@ -121,7 +121,6 @@ static int c_show(struct seq_file *m, void *v)
 	bool compat = personality(current->personality) == PER_LINUX32;
 	struct device_node *np;
 	const char *model;
-	const char *serial;
 	u32 revision;
 
 	for_each_online_cpu(i) {

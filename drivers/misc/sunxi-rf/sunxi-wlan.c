@@ -137,7 +137,7 @@ int sunxi_wlan_get_oob_irq(void)
 	pdev = wlan_data->pdev;
 
 	host_oob_irq = gpio_to_irq(wlan_data->gpio_wlan_hostwake);
-	if (IS_ERR_VALUE(host_oob_irq))
+	if (IS_ERR_VALUE((long)host_oob_irq))
 		dev_err(&pdev->dev, "map gpio [%d] to virq failed, errno = %d\n",
 			wlan_data->gpio_wlan_hostwake, host_oob_irq);
 

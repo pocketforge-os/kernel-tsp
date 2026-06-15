@@ -492,6 +492,7 @@ int xradio_etfcli_data_init(void)
 	g_etfcli_par.mode = 0;
 	g_etfcli_par.reat = 0;
 	g_etfcli_par.subchannel = ETF_SUB_CHANNEL_UPPER;
+	return 0;
 }
 
 int xradio_set_etfcli_data(int value, int index)
@@ -530,7 +531,7 @@ int xradio_set_etfcli_data(int value, int index)
 	default:
 		{
 			etf_printk(XRADIO_DBG_ERROR,
-				"This setting is not supported.\n", __func__);
+				"%s: This setting is not supported.\n", __func__);
 			return -1;
 		}
 		break;

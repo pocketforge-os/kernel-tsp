@@ -138,7 +138,6 @@ static ssize_t
 interval_show(struct class *class, struct class_attribute *attr, char *buf)
 {
 	unsigned long long value = 0;
-	unsigned long flags;
 
 	value = alarm_res.interval;
 	return sprintf(buf, "%llu\n", value);
@@ -150,7 +149,6 @@ interval_store(struct class *class, struct class_attribute *attr,
 {
 	int err = 0;
 	unsigned long long value = 0;
-	unsigned long flags;
 
 	err = kstrtoull(buf, 10, &value);
 	if (err) {

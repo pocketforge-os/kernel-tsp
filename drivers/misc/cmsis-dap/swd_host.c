@@ -66,7 +66,6 @@ typedef struct {
 static SWD_CONNECT_TYPE reset_connect = CONNECT_NORMAL;
 
 static DAP_STATE dap_state;
-static uint32_t  soft_reset = SYSRESETREQ;
 static uint32_t idcode = 0;
 
 static uint32_t swd_get_apsel(uint32_t adr)
@@ -832,13 +831,12 @@ uint8_t swd_init_debug(void)
     uint32_t tmp = 0;
     int i = 0;
     int timeout = 100;
+    int8_t retries = 4;
+    int8_t do_abort = 0;
     // init dap state with fake values
     dap_state.select = 0xffffffff;
     dap_state.csw = 0xffffffff;
 
-
-    int8_t retries = 4;
-    int8_t do_abort = 0;
 #ifdef CUSTOM_LIAN
     printk("%s: line %d custom_lian retries %d\n", __func__, __LINE__, retries);
 #endif

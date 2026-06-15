@@ -251,6 +251,7 @@ static ssize_t fw_dbg_sys_show_config(struct file *file,
 	struct xradio_common *hw_priv = file->private_data;
 	char buf[1024];
 	size_t size = 0;
+	int len = 0;
 
 	struct fwd_msg *p_msg;
 	struct fwd_sys_config *p_sys_cfg;
@@ -258,13 +259,13 @@ static ssize_t fw_dbg_sys_show_config(struct file *file,
 	ssize_t msg_buf_size;
 	ssize_t msg_req_size;
 
-	sprintf(buf, "\nshow fw dbg sys config\n\n");
+	len = sprintf(buf, "\nshow fw dbg sys config\n\n");
 
 	msg_buf_size = sizeof(struct fwd_msg) + sizeof(struct fwd_sys_config);
 
 	p_msg = xr_kzalloc(msg_buf_size, false);
 	if (p_msg == NULL) {
-		sprintf(buf, "%s" "but not enough memory to show.\n", buf);
+		len += sprintf(buf + len, "but not enough memory to show.\n");
 		goto err;
 	}
 
@@ -273,15 +274,15 @@ static ssize_t fw_dbg_sys_show_config(struct file *file,
 
 	if (xradio_fw_dbg_request(hw_priv, p_msg, msg_req_size, msg_buf_size,
 		FWD_CMD_MAJOR_ID_SYS | FWD_CMD_MINOR_ID_SYS_CONFIG)) {
-		sprintf(buf, "%s" "but cfm msg status error.\n", buf);
+		len += sprintf(buf + len, "but cfm msg status error.\n");
 		goto err;
 	}
 
 	fwd_priv.sys_config = *p_sys_cfg;
 
-	sprintf(buf, "%s" "frame trace: %08x, cmd trace: %08x, func trace: %08x\n"
+	len += sprintf(buf + len, "frame trace: %08x, cmd trace: %08x, func trace: %08x\n"
 		"fw dump: %08x, fiq dump: %08x, fiq trace: %08x\n",
-		buf, p_sys_cfg->frm_trace_addr, p_sys_cfg->cmd_trace_addr,
+		p_sys_cfg->frm_trace_addr, p_sys_cfg->cmd_trace_addr,
 		p_sys_cfg->func_trace_addr, p_sys_cfg->fw_dump_addr,
 		p_sys_cfg->fiq_dump_addr, p_sys_cfg->fiq_trace_addr);
 
@@ -289,7 +290,7 @@ err:
 	if (p_msg)
 		kfree(p_msg);
 
-	sprintf(buf, "%s\n", buf);
+	len += sprintf(buf + len, "\n");
 	size = strlen(buf);
 	return simple_read_from_buffer(user_buf, count, ppos, buf, size);
 }
@@ -333,6 +334,7 @@ static ssize_t fw_dbg_sys_show_cpu_load(struct file *file,
 {
 	char buf[2000];
 	size_t size = 0;
+	int len = 0;
 
 	int ret = 0;
 
@@ -346,17 +348,17 @@ static ssize_t fw_dbg_sys_show_cpu_load(struct file *file,
 	u32 max_num;
 	u32 stored_num;
 
-	sprintf(buf, "\nshow fw dbg sys cpu load\n\n");
+	len = sprintf(buf, "\nshow fw dbg sys cpu load\n\n");
 
 	stored_num = p_store->ind_write_idx - p_store->cat_read_idx;
 
 	if (stored_num == 0x0) {
-		sprintf(buf, "%s" "catch none.\n", buf);
+		len += sprintf(buf + len, "catch none.\n");
 		goto end;
 	}
 
-	sprintf(buf, "%s" "idx|load|stat_time|proc_time|idle_time|"
-			"evt_time|irq_time|fiq_time\n", buf);
+	len += sprintf(buf + len, "idx|load|stat_time|proc_time|idle_time|"
+			"evt_time|irq_time|fiq_time\n");
 
 	max_num = (stored_num > FWD_SYS_CPU_LOAD_CAT_MAX_NUM) ?
 			FWD_SYS_CPU_LOAD_CAT_MAX_NUM : stored_num;
@@ -374,7 +376,7 @@ static ssize_t fw_dbg_sys_show_cpu_load(struct file *file,
 			cpu_load = 0;
 		}
 
-		sprintf(buf, "%s" "%3d|%3d%%|%9d|%9d|%9d|%8d|%8d|%8d\n", buf,
+		len += sprintf(buf + len, "%3d|%3d%%|%9d|%9d|%9d|%8d|%8d|%8d\n",
 			idx, cpu_load,
 			p_store->cap[idx].stat_total_time,
 			p_store->cap[idx].cpu_active_time,
@@ -395,15 +397,15 @@ static ssize_t fw_dbg_sys_show_cpu_load(struct file *file,
 		p_store->cat_read_idx = 0x0;
 		p_store->ind_write_idx = 0x0;
 
-		sprintf(buf, "%s" "\nshow end\n", buf);
+		len += sprintf(buf + len, "\nshow end\n");
 
 	} else {
-		sprintf(buf, "%s" "\nshow left: %d\n", buf,
+		len += sprintf(buf + len, "\nshow left: %d\n",
 			p_store->ind_write_idx - p_store->cat_read_idx);
 	}
 
 end:
-	sprintf(buf, "%s\n", buf);
+	len += sprintf(buf + len, "\n");
 	size = strlen(buf);
 	ret = simple_read_from_buffer(user_buf, count, ppos, buf, size);
 
@@ -426,6 +428,7 @@ static ssize_t fw_dbg_sys_show_cpu_load_enhance(struct file *file,
 	s32 cpu_load;
 	u32 *p_sub;
 	char print_buf[512];
+	int print_len = 0;
 	u32 print_idx;
 
 	struct fwd_sys_cpu_load_store *p_store = &(fwd_priv.sys_cpu_load_store);
@@ -490,11 +493,11 @@ static ssize_t fw_dbg_sys_show_cpu_load_enhance(struct file *file,
 
 		xradio_dbg(XRADIO_DBG_ALWY, "show sub event time.\n\n");
 
-		sprintf(print_buf, "idx");
+		print_len = sprintf(print_buf, "idx");
 
 		for (print_idx = 0x0; print_idx < 32; print_idx++) {
-			sprintf(print_buf, "%s" "|%s%02d",
-				print_buf, "evt", print_idx);
+			print_len += sprintf(print_buf + print_len, "|%s%02d",
+				"evt", print_idx);
 		}
 
 		xradio_dbg(XRADIO_DBG_ALWY, "%s\n", print_buf);
@@ -503,11 +506,11 @@ static ssize_t fw_dbg_sys_show_cpu_load_enhance(struct file *file,
 
 			p_sub = &p_store->cap[idx].sub_event_proc_time[0];
 
-			sprintf(print_buf, "%3d", idx);
+			print_len = sprintf(print_buf, "%3d", idx);
 
 			for (print_idx = 0x0; print_idx < 32; print_idx++) {
-				sprintf(print_buf, "%s" "|%5d",
-					print_buf, p_sub[print_idx]);
+				print_len += sprintf(print_buf + print_len, "|%5d",
+					p_sub[print_idx]);
 			}
 			xradio_dbg(XRADIO_DBG_ALWY, "%s\n", print_buf);
 
@@ -518,11 +521,11 @@ static ssize_t fw_dbg_sys_show_cpu_load_enhance(struct file *file,
 
 		xradio_dbg(XRADIO_DBG_ALWY, "show sub irq time.\n\n");
 
-		sprintf(print_buf, "idx");
+		print_len = sprintf(print_buf, "idx");
 
 		for (print_idx = 0x0; print_idx < 32; print_idx++) {
-			sprintf(print_buf, "%s" "|%s%02d",
-				print_buf, "irq", print_idx);
+			print_len += sprintf(print_buf + print_len, "|%s%02d",
+				"irq", print_idx);
 		}
 
 		xradio_dbg(XRADIO_DBG_ALWY, "%s\n", print_buf);
@@ -531,11 +534,11 @@ static ssize_t fw_dbg_sys_show_cpu_load_enhance(struct file *file,
 
 			p_sub = &p_store->cap[idx].sub_irq_proc_time[0];
 
-			sprintf(print_buf, "%3d", idx);
+			print_len = sprintf(print_buf, "%3d", idx);
 
 			for (print_idx = 0x0; print_idx < 32; print_idx++) {
-				sprintf(print_buf, "%s" "|%5d",
-					print_buf, p_sub[print_idx]);
+				print_len += sprintf(print_buf + print_len, "|%5d",
+					p_sub[print_idx]);
 			}
 			xradio_dbg(XRADIO_DBG_ALWY, "%s\n", print_buf);
 
@@ -546,11 +549,11 @@ static ssize_t fw_dbg_sys_show_cpu_load_enhance(struct file *file,
 
 		xradio_dbg(XRADIO_DBG_ALWY, "show sub event count.\n\n");
 
-		sprintf(print_buf, "idx");
+		print_len = sprintf(print_buf, "idx");
 
 		for (print_idx = 0x0; print_idx < 32; print_idx++) {
-			sprintf(print_buf, "%s" "|%s%02d",
-				print_buf, "evt", print_idx);
+			print_len += sprintf(print_buf + print_len, "|%s%02d",
+				"evt", print_idx);
 		}
 
 		xradio_dbg(XRADIO_DBG_ALWY, "%s\n", print_buf);
@@ -559,11 +562,11 @@ static ssize_t fw_dbg_sys_show_cpu_load_enhance(struct file *file,
 
 			p_sub = &p_store->cap[idx].sub_event_proc_count[0];
 
-			sprintf(print_buf, "%3d", idx);
+			print_len = sprintf(print_buf, "%3d", idx);
 
 			for (print_idx = 0x0; print_idx < 32; print_idx++) {
-				sprintf(print_buf, "%s" "|%5d",
-					print_buf, p_sub[print_idx]);
+				print_len += sprintf(print_buf + print_len, "|%5d",
+					p_sub[print_idx]);
 			}
 			xradio_dbg(XRADIO_DBG_ALWY, "%s\n", print_buf);
 
@@ -574,11 +577,11 @@ static ssize_t fw_dbg_sys_show_cpu_load_enhance(struct file *file,
 
 		xradio_dbg(XRADIO_DBG_ALWY, "show sub irq count.\n\n");
 
-		sprintf(print_buf, "idx");
+		print_len = sprintf(print_buf, "idx");
 
 		for (print_idx = 0x0; print_idx < 32; print_idx++) {
-			sprintf(print_buf, "%s" "|%s%02d",
-				print_buf, "irq", print_idx);
+			print_len += sprintf(print_buf + print_len, "|%s%02d",
+				"irq", print_idx);
 		}
 
 		xradio_dbg(XRADIO_DBG_ALWY, "%s\n", print_buf);
@@ -587,11 +590,11 @@ static ssize_t fw_dbg_sys_show_cpu_load_enhance(struct file *file,
 
 			p_sub = &p_store->cap[idx].sub_irq_proc_count[0];
 
-			sprintf(print_buf, "%3d", idx);
+			print_len = sprintf(print_buf, "%3d", idx);
 
 			for (print_idx = 0x0; print_idx < 32; print_idx++) {
-				sprintf(print_buf, "%s" "|%5d",
-					print_buf, p_sub[print_idx]);
+				print_len += sprintf(print_buf + print_len, "|%5d",
+					p_sub[print_idx]);
 			}
 			xradio_dbg(XRADIO_DBG_ALWY, "%s\n", print_buf);
 
@@ -1044,6 +1047,7 @@ static int fw_dbg_sys_parse_func_trace(struct fwd_sys_func_trace *p_trace)
 	u32 info;
 	u32 stamp;
 	char buf[512];
+	int len = 0;
 	char place_name[8][10] = {
 		"EVENT",
 		"TIMER",
@@ -1057,11 +1061,11 @@ static int fw_dbg_sys_parse_func_trace(struct fwd_sys_func_trace *p_trace)
 
 	xradio_dbg(XRADIO_DBG_ALWY, "func trace============================\n");
 
-	sprintf(buf, "stage %02x:", p_trace->stage);
+	len = sprintf(buf, "stage %02x:", p_trace->stage);
 
 	for (i = 0; i < 8; i++) {
 		if ((1 << i) & (p_trace->stage)) {
-			sprintf(buf, "%s%s ", buf, place_name[i]);
+			len += sprintf(buf + len, "%s ", place_name[i]);
 		}
 	}
 
@@ -1135,6 +1139,7 @@ static ssize_t fw_dbg_soc_show_lpclk_stat(struct file *file,
 	struct xradio_common *hw_priv = file->private_data;
 	char buf[1024];
 	size_t size = 0;
+	int len = 0;
 
 	struct fwd_msg *p_msg;
 	struct fwd_soc_lpclk_stat *p_lpclk_stat;
@@ -1142,14 +1147,14 @@ static ssize_t fw_dbg_soc_show_lpclk_stat(struct file *file,
 	ssize_t msg_buf_size;
 	ssize_t msg_req_size;
 
-	sprintf(buf, "\nshow fw dbg soc lpclk stat\n\n");
+	len = sprintf(buf, "\nshow fw dbg soc lpclk stat\n\n");
 
 	msg_buf_size = sizeof(struct fwd_msg)
 			+ sizeof(struct fwd_soc_lpclk_stat);
 
 	p_msg = xr_kzalloc(msg_buf_size, false);
 	if (p_msg == NULL) {
-		sprintf(buf, "%s" "but not enough memory to show.\n", buf);
+		len += sprintf(buf + len, "but not enough memory to show.\n");
 		goto err;
 	}
 
@@ -1158,17 +1163,17 @@ static ssize_t fw_dbg_soc_show_lpclk_stat(struct file *file,
 
 	if (xradio_fw_dbg_request(hw_priv, p_msg, msg_req_size, msg_buf_size,
 		FWD_CMD_MAJOR_ID_SOC | FWD_CMD_MINOR_ID_SOC_LPCLK_STAT)) {
-		sprintf(buf, "%s" "but cfm msg status error.\n", buf);
+		len += sprintf(buf + len, "but cfm msg status error.\n");
 		goto err;
 	}
 
-	fw_dbg_soc_parse_lpclk_stat(buf, p_lpclk_stat);
+	len += fw_dbg_soc_parse_lpclk_stat(buf + len, p_lpclk_stat);
 
 err:
 	if (p_msg)
 		kfree(p_msg);
 
-	sprintf(buf, "%s\n", buf);
+	len += sprintf(buf + len, "\n");
 	size = strlen(buf);
 	return simple_read_from_buffer(user_buf, count, ppos, buf, size);
 }
@@ -1176,6 +1181,7 @@ err:
 static int fw_dbg_soc_parse_lpclk_stat(char *buf,
 					struct fwd_soc_lpclk_stat *p_stat)
 {
+	int len = 0;
 	s32 tsf_diff_avg;
 	s32 sleep_time;
 	s32 lp_clk_ative;
@@ -1204,7 +1210,7 @@ static int fw_dbg_soc_parse_lpclk_stat(char *buf,
 
 	lp_clk_diff = lp_clk_sleep - lp_clk_ative;
 
-	sprintf(buf, "%s" "---lp clk statitics:\n"
+	len = sprintf(buf, "---lp clk statitics:\n"
 		"tsf_diff_sum: %d \n"
 		"tsf_diff_max: %d \n"
 		"tsf_diff_cur: %d \n"
@@ -1214,7 +1220,6 @@ static int fw_dbg_soc_parse_lpclk_stat(char *buf,
 		"suspend_time_cur: %d \n"
 		"resume_time_cur: %d \n"
 		"---\n",
-		buf,
 		p_stat->tsf_diff_sum,
 		p_stat->tsf_diff_max,
 		p_stat->tsf_diff_cur,
@@ -1224,7 +1229,7 @@ static int fw_dbg_soc_parse_lpclk_stat(char *buf,
 		p_stat->suspend_time_cur,
 		p_stat->resume_time_cur);
 
-	sprintf(buf, "%s" "---lp clk calculate:\n"
+	len += sprintf(buf + len, "---lp clk calculate:\n"
 		"tsf_diff_avg(us): %d \n"
 		"sleep time: %d\n"
 		"lp clk freq(active) : %d \n"
@@ -1232,7 +1237,6 @@ static int fw_dbg_soc_parse_lpclk_stat(char *buf,
 		"lp clk freq(sleep)  : %d \n"
 		"lp clk diff : %d \n"
 		"---\n",
-		buf,
 		tsf_diff_avg,
 		sleep_time,
 		lp_clk_ative,
@@ -1240,7 +1244,7 @@ static int fw_dbg_soc_parse_lpclk_stat(char *buf,
 		lp_clk_sleep,
 		lp_clk_diff);
 
-	return 0;
+	return len;
 }
 
 static int fw_dbg_lmc_init(struct xradio_common *hw_priv,
@@ -3107,6 +3111,7 @@ static ssize_t fw_dbg_pas_show_hw_stat(struct file *file,
 	struct xradio_common *hw_priv = file->private_data;
 	char buf[1024];
 	size_t size = 0;
+	int len = 0;
 
 	struct fwd_msg *p_msg;
 	struct fwd_pas_hw_stat *p_hw_stat;
@@ -3115,7 +3120,7 @@ static ssize_t fw_dbg_pas_show_hw_stat(struct file *file,
 	ssize_t msg_req_size;
 	ssize_t msg_cfm_size;
 
-	sprintf(buf, "\nshow fw dbg pas hw stat\n\n");
+	len = sprintf(buf, "\nshow fw dbg pas hw stat\n\n");
 
 	msg_req_size = sizeof(struct fwd_msg);
 	msg_cfm_size = sizeof(struct fwd_msg)
@@ -3125,7 +3130,7 @@ static ssize_t fw_dbg_pas_show_hw_stat(struct file *file,
 
 	p_msg = xr_kzalloc(msg_buf_size, false);
 	if (p_msg == NULL) {
-		sprintf(buf, "%s" "but not enough memory to show.\n", buf);
+		len += sprintf(buf + len, "but not enough memory to show.\n");
 		goto err;
 	}
 
@@ -3133,40 +3138,42 @@ static ssize_t fw_dbg_pas_show_hw_stat(struct file *file,
 
 	if (xradio_fw_dbg_request(hw_priv, p_msg, msg_req_size, msg_cfm_size,
 		FWD_CMD_MAJOR_ID_PAS | FWD_CMD_MINOR_ID_PAS_HW_STAT)) {
-		sprintf(buf, "%s" "but cfm msg status error.\n", buf);
+		len += sprintf(buf + len, "but cfm msg status error.\n");
 		goto err;
 	}
 
-	fw_dbg_pas_parse_hw_stat(buf, p_hw_stat);
+	len += fw_dbg_pas_parse_hw_stat(buf + len, p_hw_stat);
 
 err:
 	if (p_msg)
 		kfree(p_msg);
 
-	sprintf(buf, "%s\n", buf);
+	len += sprintf(buf + len, "\n");
 	size = strlen(buf);
 	return simple_read_from_buffer(user_buf, count, ppos, buf, size);
 }
 
 static int fw_dbg_pas_parse_hw_stat(char *buf, struct fwd_pas_hw_stat *p_stat)
 {
-	sprintf(buf, "%s" "pas statistics counter-----------\n", buf);
+	int len = 0;
 
-	sprintf(buf, "%s" "fiq count :%4d, rx event:%4d\n", buf,
+	len = sprintf(buf, "pas statistics counter-----------\n");
+
+	len += sprintf(buf + len, "fiq count :%4d, rx event:%4d\n",
 		p_stat->fiq_count, p_stat->rx_event_count);
 
-	sprintf(buf, "%s" "tx [write port:%4d][success:%3d][failure:%2d]\n", buf,
+	len += sprintf(buf + len, "tx [write port:%4d][success:%3d][failure:%2d]\n",
 		p_stat->write_port_count,
 		p_stat->tx_success_count,
 		p_stat->tx_failure_count);
 
-	sprintf(buf, "%s" "rx [stored :%4d][error:%3d][beacon :%2d][multicast: %4d]\n", buf,
+	len += sprintf(buf + len, "rx [stored :%4d][error:%3d][beacon :%2d][multicast: %4d]\n",
 			p_stat->rx_frame_stored_count,
 			p_stat->rx_frame_error_count,
 			p_stat->rx_beacon_count,
 			p_stat->rx_multicast_count);
 
-	return 0;
+	return len;
 }
 
 static ssize_t fw_dbg_pas_config_force_mode(struct file *file,
@@ -3573,6 +3580,7 @@ static ssize_t fw_dbg_epta_show_time_line_ctrl(struct file *file,
 	struct xradio_common *hw_priv = file->private_data;
 	char buf[1024];
 	size_t size = 0;
+	int len = 0;
 
 	struct fwd_msg *p_msg;
 	struct fwd_epta_time_line_cfg *p_cfg;
@@ -3581,7 +3589,7 @@ static ssize_t fw_dbg_epta_show_time_line_ctrl(struct file *file,
 	ssize_t msg_req_size;
 	ssize_t msg_cfm_size;
 
-	sprintf(buf, "\nshow fw dbg epta time line config\n\n");
+	len = sprintf(buf, "\nshow fw dbg epta time line config\n\n");
 
 	msg_req_size = sizeof(struct fwd_msg)
 			+ sizeof(struct fwd_epta_time_line_cfg);
@@ -3591,7 +3599,7 @@ static ssize_t fw_dbg_epta_show_time_line_ctrl(struct file *file,
 
 	p_msg = xr_kzalloc(msg_buf_size, false);
 	if (p_msg == NULL) {
-		sprintf(buf, "%s" "but not enough memory to show.\n", buf);
+		len += sprintf(buf + len, "but not enough memory to show.\n");
 		goto err;
 	}
 
@@ -3601,17 +3609,17 @@ static ssize_t fw_dbg_epta_show_time_line_ctrl(struct file *file,
 
 	if (xradio_fw_dbg_request(hw_priv, p_msg, msg_req_size, msg_cfm_size,
 		FWD_CMD_MAJOR_ID_EPTA | FWD_CMD_MINOR_ID_EPTA_TIME_LINE)) {
-		sprintf(buf, "%s" "but cfm msg status error.\n", buf);
+		len += sprintf(buf + len, "but cfm msg status error.\n");
 		goto err;
 	}
 
-	sprintf(buf, "%s" "rf_switch_ctrl: %08x\n\n", buf, p_cfg->rf_switch_ctrl);
+	len += sprintf(buf + len, "rf_switch_ctrl: %08x\n\n", p_cfg->rf_switch_ctrl);
 
 err:
 	if (p_msg)
 		kfree(p_msg);
 
-	sprintf(buf, "%s\n", buf);
+	len += sprintf(buf + len, "\n");
 	size = strlen(buf);
 	return simple_read_from_buffer(user_buf, count, ppos, buf, size);
 }
@@ -3755,6 +3763,7 @@ static ssize_t fw_dbg_epta_show_rf_stat_ctrl(struct file *file,
 	struct xradio_common *hw_priv = file->private_data;
 	char buf[1024];
 	size_t size = 0;
+	int len = 0;
 
 	struct fwd_msg *p_msg;
 	struct fwd_epta_rf_stat_cfg *p_cfg;
@@ -3763,7 +3772,7 @@ static ssize_t fw_dbg_epta_show_rf_stat_ctrl(struct file *file,
 	ssize_t msg_req_size;
 	ssize_t msg_cfm_size;
 
-	sprintf(buf, "\nshow fw dbg epta rf stat config\n\n");
+	len = sprintf(buf, "\nshow fw dbg epta rf stat config\n\n");
 
 	msg_req_size = sizeof(struct fwd_msg)
 			+ sizeof(struct fwd_epta_rf_stat_cfg);
@@ -3773,7 +3782,7 @@ static ssize_t fw_dbg_epta_show_rf_stat_ctrl(struct file *file,
 
 	p_msg = xr_kzalloc(msg_buf_size, false);
 	if (p_msg == NULL) {
-		sprintf(buf, "%s" "but not enough memory to show.\n", buf);
+		len += sprintf(buf + len, "but not enough memory to show.\n");
 		goto err;
 	}
 
@@ -3783,17 +3792,17 @@ static ssize_t fw_dbg_epta_show_rf_stat_ctrl(struct file *file,
 
 	if (xradio_fw_dbg_request(hw_priv, p_msg, msg_req_size, msg_cfm_size,
 		FWD_CMD_MAJOR_ID_EPTA | FWD_CMD_MINOR_ID_EPTA_RF_STAT)) {
-		sprintf(buf, "%s" "but cfm msg status error.\n", buf);
+		len += sprintf(buf + len, "but cfm msg status error.\n");
 		goto err;
 	}
 
-	sprintf(buf, "%s" "on_off_ctrl: 0x%08x\n\n", buf, p_cfg->on_off_ctrl);
+	len += sprintf(buf + len, "on_off_ctrl: 0x%08x\n\n", p_cfg->on_off_ctrl);
 
 err:
 	if (p_msg)
 		kfree(p_msg);
 
-	sprintf(buf, "%s\n", buf);
+	len += sprintf(buf + len, "\n");
 	size = strlen(buf);
 	return simple_read_from_buffer(user_buf, count, ppos, buf, size);
 }

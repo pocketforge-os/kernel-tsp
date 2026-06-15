@@ -53,9 +53,14 @@ jobs:
               cd /work/src
               make pocketforge_tsp_defconfig
 
+              # KCFLAGS:
+              #   -Wno-error=incompatible-pointer-types — vendor BT drivers (hci_ll.c)
+              #   -Wno-zero-length-bounds — pre-C99 flexible arrays (ehci, vin, nf_conntrack)
+              #   -Wno-misleading-indentation — vendor driver indent issues
+              #   -Wno-psabi — GCC 9.1 ABI change notes (struct printf_spec)
               make -j$(nproc) \
                 HOST_EXTRACFLAGS="-fcommon" \
-                KCFLAGS="-Wno-error=incompatible-pointer-types" \
+                KCFLAGS="-Wno-error=incompatible-pointer-types -Wno-zero-length-bounds -Wno-misleading-indentation -Wno-psabi" \
                 Image dtbs modules
             '
 

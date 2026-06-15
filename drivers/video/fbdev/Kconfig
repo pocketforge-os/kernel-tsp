@@ -55,7 +55,7 @@ config FIRMWARE_EDID
 
 config FB_CMDLINE
 	bool "Enable fbdev cmdline param"
-	depends on FB && !DISP2_SUNXI
+	depends on FB
 	default y
        ---help---
          Say Y, if you want to pass some parameters form cmdline to fbdev.

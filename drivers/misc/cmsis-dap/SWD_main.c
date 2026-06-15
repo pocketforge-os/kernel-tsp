@@ -554,15 +554,12 @@ static ssize_t swd_update_store(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
 	unsigned long data;
-	int ret;
 	struct sunxi_swd *swd = dev_get_drvdata(dev);
-	static int pending_cnt = 0;
 
 	data = simple_strtoul(buf, NULL, 10);
 
 	if (1 == data) {
 		if (swd->is_pending) {
-			pending_cnt = 0;
 			cancel_work_sync(&swd->work);
 			flush_workqueue(swd->wq);
 			queue_work(swd->wq, &swd->work);
@@ -595,9 +592,6 @@ static ssize_t swd_reset_store(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
 	unsigned long data;
-	int ret;
-	struct sunxi_swd *swd = dev_get_drvdata(dev);
-	static int pending_cnt = 0;
 
 	data = simple_strtoul(buf, NULL, 10);
 
@@ -721,7 +715,6 @@ emem:
 static int swd_remove(struct platform_device *pdev)
 {
 	struct sunxi_swd *swd = platform_get_drvdata(pdev);
-	struct device *dev = &pdev->dev;
 
 	cancel_work_sync(&swd->work);
 	destroy_workqueue(swd->wq);
@@ -734,17 +727,11 @@ static int swd_remove(struct platform_device *pdev)
 #ifdef CONFIG_PM
 static int swd_suspend_noirq(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct sunxi_swd *swd = platform_get_drvdata(pdev);
-
 	return 0;
 }
 
 static int swd_resume_noirq(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct sunxi_swd *swd = platform_get_drvdata(pdev);
-
 	return 0;
 }
 
