@@ -8,7 +8,7 @@ dtb-$(CONFIG_ARCH_SUN50IW6P1) += sun50iw6p1-soc.dtb
 
 dtb-$(CONFIG_ARCH_SUN50IW8P1) += sun50iw8p1-fpga.dtb sun50iw8p1-soc.dtb
 dtb-$(CONFIG_ARCH_SUN50IW9P1) += board.dtb
-dtb-$(CONFIG_ARCH_SUN50IW10P1) += board.dtb
+dtb-$(CONFIG_ARCH_SUN50IW10P1) += pocketforge_tsp.dtb
 dtb-$(CONFIG_ARCH_SUN50IW11P1) += board.dtb
 dtb-$(CONFIG_ARCH_SUN50IW5T) += sun50iw5t-fpga.dtb
 
