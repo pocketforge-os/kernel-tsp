@@ -1,0 +1,78 @@
+# kernel-tsp PR build validation
+# ==========================================================================
+# Trigger: PR to main.
+# Runner: GitHub-hosted (ubuntu-latest). Free-tier compatible.
+# Purpose: validate the kernel builds cleanly. Required status check for
+#   branch protection (tsp-cv7.2.2).
+#
+# Does NOT publish artifacts — that's release.yml's job.
+# ==========================================================================
+name: PR Build
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-build-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build-kernel:
+    name: Build kernel (arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build container image
+        run: docker build -t pocketforge/kernel-build:ci .github/
+
+      - name: Build kernel
+        run: |
+          mkdir -p out
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "$PWD:/work/src:ro" \
+            -v "$PWD/out:/work/out" \
+            pocketforge/kernel-build:ci \
+            bash -c '
+              set -eux
+
+              export ARCH=arm64
+              export CROSS_COMPILE=aarch64-none-linux-gnu-
+              export KBUILD_OUTPUT=/work/out/kernel
+
+              mkdir -p "$KBUILD_OUTPUT"
+
+              cd /work/src
+              make pocketforge_tsp_defconfig
+
+              make -j$(nproc) \
+                HOST_EXTRACFLAGS="-fcommon" \
+                KCFLAGS="-Wno-error=incompatible-pointer-types" \
+                Image dtbs modules
+            '
+
+      - name: Verify artifacts
+        run: |
+          set -eux
+          # Kernel Image must exist and be non-empty
+          test -s out/kernel/arch/arm64/boot/Image
+
+          # DTB must exist
+          test -f out/kernel/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb
+
+          # Print kernel version for the log
+          strings out/kernel/arch/arm64/boot/Image | grep -m1 "Linux version" || true
+
+          # Print artifact sizes
+          ls -lh out/kernel/arch/arm64/boot/Image
+          ls -lh out/kernel/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb
+
+          echo "Build successful."
