@@ -125,7 +125,7 @@ static __inline uint32_t TIMESTAMP_GET (void) {
   return 1;
 }
 
-static void PORT_JTAG_SETUP(void)
+static void __maybe_unused PORT_JTAG_SETUP(void)
 {
 #if (DAP_JTAG != 0)
 #endif
@@ -134,7 +134,7 @@ static void PORT_JTAG_SETUP(void)
 /** Setup SWD I/O pins: SWCLK, SWDIO, and nRESET.
  - SWCLK, SWDIO, nRESET to output mode and set to default high level.
 */
-static void PORT_SWD_SETUP(void)
+static void __maybe_unused PORT_SWD_SETUP(void)
 {
 	port_swd_setup();
 }
@@ -143,7 +143,7 @@ static void PORT_SWD_SETUP(void)
 Disables the DAP Hardware I/O pins which configures:
  - TCK/SWCLK, TMS/SWDIO, TDI, TDO, nTRST, nRESET to High-Z mode.
 */
-static void PORT_OFF(void)
+static void __maybe_unused PORT_OFF(void)
 {
 	port_off();
 }
@@ -285,7 +285,7 @@ static __inline void LED_CONNECTED_OUT(uint32_t bit)
 }
 #endif
 
-static void DAP_SETUP(void)
+static void __maybe_unused DAP_SETUP(void)
 {
 	port_off();
 }

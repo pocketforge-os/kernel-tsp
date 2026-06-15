@@ -205,6 +205,14 @@
 //#include <stdint.h>
 //#include "cmsis_compiler.h"
 
+// Provide safe defaults if DAP_config.h was not included first.
+#ifndef DAP_SWD
+#define DAP_SWD  0
+#endif
+#ifndef DAP_JTAG
+#define DAP_JTAG 0
+#endif
+
 // DAP Data structure
 typedef struct {
   uint8_t     debug_port;                       // Debug Port
@@ -309,7 +317,7 @@ __STATIC_FORCEINLINE void PIN_DELAY_SLOW (uint32_t delay) {
 #endif
 #else
 #include <linux/delay.h>
-static  void PIN_DELAY_SLOW (uint32_t delay) {
+static void __maybe_unused PIN_DELAY_SLOW (uint32_t delay) {
 	// ndelay(delay);
 	udelay(delay);
 }
@@ -325,7 +333,7 @@ static  void PIN_DELAY_SLOW (uint32_t delay) {
 #define __nop nop
 #endif
 
-static void PIN_DELAY_FAST (void) {
+static void __maybe_unused PIN_DELAY_FAST (void) {
 #if (DELAY_FAST_CYCLES >= 1U)
   __nop();
 #endif

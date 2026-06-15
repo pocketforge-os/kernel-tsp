@@ -691,6 +691,8 @@ static int sensor_read_block_otp_a16_d8(struct v4l2_subdev *sd,
 	return (i2c_transfer(client->adapter, msg, 2) == 2);
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
 static int sensor_write_block_otp_a16_d8(struct v4l2_subdev *sd,
 					 unsigned char dev_addr,
 					 unsigned short eeprom_addr,
@@ -718,6 +720,7 @@ static int sensor_write_block_otp_a16_d8(struct v4l2_subdev *sd,
 	}
 	return ret;
 }
+#pragma GCC diagnostic pop
 
 #if 0
 static int sensor_write_block_otp_continuous_a16_d8(struct v4l2_subdev *sd,

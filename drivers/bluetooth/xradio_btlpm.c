@@ -734,7 +734,7 @@ static int bluesleep_probe(struct platform_device *pdev)
 	//2.get bt_host_wake gpio irq
 #ifdef AW1732_BT
 	bsi->host_wake_irq = gpio_to_irq(bsi->host_wake);
-	if (IS_ERR_VALUE(bsi->host_wake_irq)) {
+	if (IS_ERR_VALUE((long)bsi->host_wake_irq)) {
 		BT_ERR("map gpio [%d] to virq failed, errno = %d\n", bsi->host_wake, bsi->host_wake_irq);
 		ret = -ENODEV;
 		goto free_bt_ext_wake;
