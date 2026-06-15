@@ -68,7 +68,7 @@ static SWD_CONNECT_TYPE reset_connect = CONNECT_NORMAL;
 static DAP_STATE dap_state;
 static uint32_t idcode = 0;
 
-static uint32_t swd_get_apsel(uint32_t adr)
+static uint32_t __maybe_unused swd_get_apsel(uint32_t adr)
 {
     //uint32_t apsel = target_get_apsel();
 	uint32_t apsel = 0;

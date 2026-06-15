@@ -3558,8 +3558,8 @@ int wsm_get_tx(struct xradio_common *hw_priv, u8 **data,
 					priv->if_id,
 					tx_allowed_mask,
 					&wsm, &tx_info, &txpriv)) {
-				wsm_printk(XRADIO_DBG_WARN, "%s, if_id=%d(enable=%d), tx_allowed_mask=%08x, " \
-					"queue_num=%d, queued_item=%d, pending_item=%d" \
+			wsm_printk(XRADIO_DBG_WARN, "%s, if_id=%d(enable=%d), tx_allowed_mask=%08x, " \
+				"queue_num=%d, queued_item=%zu, pending_item=%zu" \
 					"link_id_after_dtim=%d, link_id_uapsd=%d, tx_multicast=%d, " \
 					"pspoll_mask=%d, sta_asleep_mask=%d\n",
 					__func__, priv->if_id, atomic_read(&priv->enabled),
