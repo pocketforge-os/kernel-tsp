@@ -1,0 +1,255 @@
+# kernel-tsp release build + sign + publish
+# ==========================================================================
+# Trigger: tag push matching tsp-*.
+# Runner: self-hosted Dell runner (org-level, label: build-lab).
+#   - Reaches kubo at 127.0.0.1:5001 for IPFS publish.
+#   - Has the PocketForge release key (minisign) via Actions secret.
+#
+# Steps:
+#   1. Reproducible build (SOURCE_DATE_EPOCH + KBUILD vars).
+#   2. Package artifacts (Image + DTB + modules tarball).
+#   3. SHA-256 manifest.
+#   4. Sign with PocketForge release key (minisign Ed25519).
+#   5. Publish to GitHub Releases.
+#   6. ipfs add each artifact; update vendor-manifest.
+#
+# ~10 min job.
+# ==========================================================================
+name: Release
+
+on:
+  push:
+    tags:
+      - 'tsp-*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, sign, publish
+    runs-on: [self-hosted, build-lab]
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0  # full history for SOURCE_DATE_EPOCH
+
+      - name: Build container image
+        run: docker build -t pocketforge/kernel-build:ci .github/
+
+      - name: Reproducible kernel build
+        run: |
+          mkdir -p out
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "$PWD:/work/src:ro" \
+            -v "$PWD/out:/work/out" \
+            pocketforge/kernel-build:ci \
+            bash -c '
+              set -eux
+
+              export ARCH=arm64
+              export CROSS_COMPILE=aarch64-none-linux-gnu-
+              export KBUILD_OUTPUT=/work/out/kernel
+
+              # Reproducibility: pin all timestamps to the tagged commit
+              export SOURCE_DATE_EPOCH=$(git -C /work/src log -1 --format=%ct)
+              export KBUILD_BUILD_TIMESTAMP="@${SOURCE_DATE_EPOCH}"
+              export KBUILD_BUILD_USER=pocketforge
+              export KBUILD_BUILD_HOST=pocketforge-builder
+
+              mkdir -p "$KBUILD_OUTPUT"
+
+              cd /work/src
+              make pocketforge_tsp_defconfig
+
+              make -j$(nproc) \
+                HOST_EXTRACFLAGS="-fcommon" \
+                KCFLAGS="-Wno-error=incompatible-pointer-types" \
+                Image dtbs modules
+
+              # Install modules to staging tree
+              make \
+                HOST_EXTRACFLAGS="-fcommon" \
+                KCFLAGS="-Wno-error=incompatible-pointer-types" \
+                INSTALL_MOD_PATH=/work/out/kernel-modules \
+                modules_install
+            '
+
+      - name: Package artifacts
+        id: package
+        run: |
+          set -eux
+          TAG="${GITHUB_REF_NAME}"
+          STAGING="out/release"
+          mkdir -p "$STAGING"
+
+          # Copy kernel Image
+          cp out/kernel/arch/arm64/boot/Image "$STAGING/Image"
+
+          # Copy DTB
+          cp out/kernel/arch/arm64/boot/dts/sunxi/pocketforge_tsp.dtb \
+             "$STAGING/pocketforge_tsp.dtb"
+
+          # Create modules tarball (deterministic: sorted, clamped mtime)
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          tar --sort=name \
+              --mtime="@${SOURCE_DATE_EPOCH}" \
+              --clamp-mtime \
+              --owner=0 --group=0 --numeric-owner \
+              -cf - -C out/kernel-modules lib/modules/ \
+            | xz -9 --threads=1 > "$STAGING/modules-${TAG}.tar.xz"
+
+          # SHA-256 manifest
+          cd "$STAGING"
+          sha256sum Image pocketforge_tsp.dtb "modules-${TAG}.tar.xz" \
+            > "SHA256SUMS"
+
+          echo "staging=$STAGING" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          # Print for the log
+          cat SHA256SUMS
+          ls -lh .
+
+      - name: Sign artifacts
+        env:
+          RELEASE_SECRET_KEY_FILE: ${{ secrets.RELEASE_SECRET_KEY_FILE }}
+        run: |
+          set -eux
+          STAGING="${{ steps.package.outputs.staging }}"
+
+          if [ -z "${RELEASE_SECRET_KEY_FILE:-}" ]; then
+            echo "::error::RELEASE_SECRET_KEY_FILE secret is not set. Cannot sign."
+            exit 1
+          fi
+
+          # Write the secret key to a temp file (minisign reads from file)
+          KEY_FILE=$(mktemp)
+          trap 'rm -f "$KEY_FILE"' EXIT
+          echo "$RELEASE_SECRET_KEY_FILE" > "$KEY_FILE"
+
+          # Sign each artifact + the manifest
+          for f in "$STAGING/Image" \
+                   "$STAGING/pocketforge_tsp.dtb" \
+                   "$STAGING/modules-${{ steps.package.outputs.tag }}.tar.xz" \
+                   "$STAGING/SHA256SUMS"; do
+            minisign -S -s "$KEY_FILE" -m "$f" \
+              -t "PocketForge kernel-tsp ${{ steps.package.outputs.tag }}"
+          done
+
+          echo "Signed artifacts:"
+          ls -la "$STAGING"/*.minisig
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eux
+          TAG="${{ steps.package.outputs.tag }}"
+          STAGING="${{ steps.package.outputs.staging }}"
+
+          gh release create "$TAG" \
+            --title "kernel-tsp ${TAG}" \
+            --notes "PocketForge kernel build for TrimUI Smart Pro.
+
+          **Artifacts:**
+          - \`Image\` — Linux 4.9.191 kernel (arm64)
+          - \`pocketforge_tsp.dtb\` — Device tree blob
+          - \`modules-${TAG}.tar.xz\` — Kernel modules
+          - \`SHA256SUMS\` — Integrity manifest
+          - \`*.minisig\` — minisign Ed25519 signatures
+
+          Verify with:
+          \`\`\`
+          minisign -Vm Image -p release.pub
+          sha256sum -c SHA256SUMS
+          \`\`\`" \
+            "$STAGING"/Image \
+            "$STAGING"/pocketforge_tsp.dtb \
+            "$STAGING"/modules-"${TAG}".tar.xz \
+            "$STAGING"/SHA256SUMS \
+            "$STAGING"/*.minisig
+
+      - name: Publish to IPFS
+        run: |
+          set -eux
+          TAG="${{ steps.package.outputs.tag }}"
+          STAGING="${{ steps.package.outputs.staging }}"
+
+          # ipfs add each artifact and capture CIDs
+          declare -A CIDS
+          for f in Image pocketforge_tsp.dtb "modules-${TAG}.tar.xz" SHA256SUMS; do
+            CID=$(ipfs add --quieter --cid-version=1 "$STAGING/$f")
+            CIDS["$f"]="$CID"
+            echo "$f -> $CID"
+          done
+
+          # Pin all CIDs
+          for CID in "${CIDS[@]}"; do
+            ipfs pin add "$CID"
+          done
+
+          # Write CID map for the vendor-manifest update step
+          for f in "${!CIDS[@]}"; do
+            echo "$f=${CIDS[$f]}"
+          done > "$STAGING/cid-map.txt"
+
+          cat "$STAGING/cid-map.txt"
+
+      - name: Update vendor-manifest
+        env:
+          # GITHUB_TOKEN is scoped to kernel-tsp only. Cross-repo push to
+          # vendor-manifest requires a PAT with repo scope, stored as a
+          # separate secret.
+          GH_TOKEN: ${{ secrets.VENDOR_MANIFEST_PAT }}
+        run: |
+          set -eux
+          TAG="${{ steps.package.outputs.tag }}"
+          STAGING="${{ steps.package.outputs.staging }}"
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::VENDOR_MANIFEST_PAT not set. Skipping vendor-manifest update."
+            echo "Manually add the kernel-tsp artifacts to vendor-manifest/manifest.toml."
+            exit 0
+          fi
+
+          # Clone vendor-manifest
+          MANIFEST_DIR=$(mktemp -d)
+          trap 'rm -rf "$MANIFEST_DIR"' EXIT
+          gh repo clone pocketforge-os/vendor-manifest "$MANIFEST_DIR" -- --depth=1
+
+          # Read artifact sizes and SHAs from our build
+          IMAGE_SHA=$(sha256sum "$STAGING/Image" | cut -d' ' -f1)
+          IMAGE_SIZE=$(stat -c%s "$STAGING/Image")
+          DTB_SHA=$(sha256sum "$STAGING/pocketforge_tsp.dtb" | cut -d' ' -f1)
+          DTB_SIZE=$(stat -c%s "$STAGING/pocketforge_tsp.dtb")
+          MODULES_SHA=$(sha256sum "$STAGING/modules-${TAG}.tar.xz" | cut -d' ' -f1)
+          MODULES_SIZE=$(stat -c%s "$STAGING/modules-${TAG}.tar.xz")
+
+          # Read CIDs from the IPFS step
+          IMAGE_CID=$(grep "^Image=" "$STAGING/cid-map.txt" | cut -d= -f2)
+          DTB_CID=$(grep "^pocketforge_tsp.dtb=" "$STAGING/cid-map.txt" | cut -d= -f2)
+          MODULES_CID=$(grep "^modules-${TAG}.tar.xz=" "$STAGING/cid-map.txt" | cut -d= -f2)
+
+          # Append new entries to manifest.toml
+          {
+            printf '\n# --- kernel-tsp %s (added by release.yml) ---\n\n' "$TAG"
+            printf '[[blobs]]\npath = "kernel-tsp/%s/Image"\nsize = %s\nsha256 = "%s"\ncid = "%s"\ngroup = "kernel-tsp-%s"\n\n' \
+              "$TAG" "$IMAGE_SIZE" "$IMAGE_SHA" "$IMAGE_CID" "$TAG"
+            printf '[[blobs]]\npath = "kernel-tsp/%s/pocketforge_tsp.dtb"\nsize = %s\nsha256 = "%s"\ncid = "%s"\ngroup = "kernel-tsp-%s"\n\n' \
+              "$TAG" "$DTB_SIZE" "$DTB_SHA" "$DTB_CID" "$TAG"
+            printf '[[blobs]]\npath = "kernel-tsp/%s/modules.tar.xz"\nsize = %s\nsha256 = "%s"\ncid = "%s"\ngroup = "kernel-tsp-%s"\n' \
+              "$TAG" "$MODULES_SIZE" "$MODULES_SHA" "$MODULES_CID" "$TAG"
+          } >> "$MANIFEST_DIR/manifest.toml"
+
+          # Commit and push
+          cd "$MANIFEST_DIR"
+          git config user.name "pocketforge-ci"
+          git config user.email "ci@pocketforge.dev"
+          git add manifest.toml
+          git commit -m "kernel-tsp: add ${TAG} artifacts (Image + DTB + modules)"
+          git push origin main
