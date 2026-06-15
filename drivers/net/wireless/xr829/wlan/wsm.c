@@ -1944,7 +1944,7 @@ static int wsm_measure_cmpl_indication(struct xradio_common *hw_priv,
 		buf_len = sizeof(LMAC_MEAS_LINK_MEASUREMENT_RESULTS);
 		break;
 	}
-	wsm_printk(XRADIO_DBG_ERROR, "[11K]buf_len = %d\n", buf_len);
+	wsm_printk(XRADIO_DBG_ERROR, "[11K]buf_len = %u\n", buf_len);
 	WSM_GET(buf, &measure_cmpl.MeasurementReport, buf_len);
 
 	data = (u32 *)(&measure_cmpl);
