@@ -646,8 +646,8 @@ int pas_ram_check(struct xradio_common *hw_priv)
 				unsigned char *check_addr = read_buf;
 				while (check_addr < read_buf + WRITE_READ_MAX_LEN) {
 					if (*check_addr != write_value[i]) {
-						printk(KERN_ERR "[pas_ram err]:error address:0x%08x, write value:0x%02x, but read value:0x%02x\n",
-								addr + check_addr - read_buf, write_value[i], *check_addr);
+					printk(KERN_ERR "[pas_ram err]:error address:0x%08x, write value:0x%02x, but read value:0x%02x\n",
+							(unsigned int)(addr + (check_addr - read_buf)), write_value[i], *check_addr);
 					}
 					check_addr++;
 				}

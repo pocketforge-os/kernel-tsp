@@ -25,6 +25,12 @@ on:
 permissions:
   contents: write
 
+# Only one release build at a time on the Dell runner.
+# Do NOT cancel-in-progress — a release build that started should finish.
+concurrency:
+  group: release-build
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Build, sign, publish
@@ -205,26 +211,29 @@ jobs:
           cat "$STAGING/cid-map.txt"
 
       - name: Update vendor-manifest
+        if: success()
         env:
           # GITHUB_TOKEN is scoped to kernel-tsp only. Cross-repo push to
           # vendor-manifest requires a PAT with repo scope, stored as a
           # separate secret.
-          GH_TOKEN: ${{ secrets.VENDOR_MANIFEST_PAT }}
+          VENDOR_MANIFEST_PAT: ${{ secrets.VENDOR_MANIFEST_PAT }}
         run: |
-          set -eux
+          set -eu
           TAG="${{ steps.package.outputs.tag }}"
           STAGING="${{ steps.package.outputs.staging }}"
 
-          if [ -z "${GH_TOKEN:-}" ]; then
+          if [ -z "${VENDOR_MANIFEST_PAT:-}" ]; then
             echo "::warning::VENDOR_MANIFEST_PAT not set. Skipping vendor-manifest update."
             echo "Manually add the kernel-tsp artifacts to vendor-manifest/manifest.toml."
             exit 0
           fi
 
-          # Clone vendor-manifest
+          # Clone vendor-manifest using the PAT for auth
           MANIFEST_DIR=$(mktemp -d)
           trap 'rm -rf "$MANIFEST_DIR"' EXIT
-          gh repo clone pocketforge-os/vendor-manifest "$MANIFEST_DIR" -- --depth=1
+          git clone --depth=1 \
+            "https://x-access-token:${VENDOR_MANIFEST_PAT}@github.com/pocketforge-os/vendor-manifest.git" \
+            "$MANIFEST_DIR"
 
           # Read artifact sizes and SHAs from our build
           IMAGE_SHA=$(sha256sum "$STAGING/Image" | cut -d' ' -f1)

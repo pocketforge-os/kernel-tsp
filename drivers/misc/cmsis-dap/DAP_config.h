@@ -15,6 +15,9 @@
 
 /// Indicate that Serial Wire Debug (SWD) communication mode is available at the Debug Access Port.
 /// This information is returned by the command \ref DAP_Info as part of <b>Capabilities</b>.
+#ifdef DAP_SWD
+#undef DAP_SWD
+#endif
 #define DAP_SWD                 1               ///< SWD Mode:  1 = available, 0 = not available
 
 /// Indicate that JTAG communication mode is available at the Debug Port.
