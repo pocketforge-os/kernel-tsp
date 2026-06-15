@@ -73,6 +73,7 @@ COPY --from=toolchain-fetch /opt/arm-10.3-2021.07 /opt/arm-10.3-2021.07
 # gcc = host compiler for build-time tools (fixdep, dtc, genksyms).
 # bc bison flex = kconfig + kernel build requirements.
 # libssl-dev libelf-dev = kernel crypto + BTF/module signing.
+# kmod = depmod (generates modules.dep for modules_install).
 # cpio gzip = initrd assembly (if needed downstream).
 # minisign = release signing (PocketForge release key, Ed25519).
 RUN apt-get update \
@@ -85,6 +86,7 @@ RUN apt-get update \
         gcc \
         git \
         gzip \
+        kmod \
         libelf-dev \
         libssl-dev \
         make \

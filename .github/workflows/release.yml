@@ -68,13 +68,13 @@ jobs:
 
               make -j$(nproc) \
                 HOST_EXTRACFLAGS="-fcommon" \
-                KCFLAGS="-Wno-error=incompatible-pointer-types" \
+                KCFLAGS="-Wno-error=incompatible-pointer-types -Wno-zero-length-bounds -Wno-misleading-indentation -Wno-psabi" \
                 Image dtbs modules
 
               # Install modules to staging tree
               make \
                 HOST_EXTRACFLAGS="-fcommon" \
-                KCFLAGS="-Wno-error=incompatible-pointer-types" \
+                KCFLAGS="-Wno-error=incompatible-pointer-types -Wno-zero-length-bounds -Wno-misleading-indentation -Wno-psabi" \
                 INSTALL_MOD_PATH=/work/out/kernel-modules \
                 modules_install
             '
@@ -179,18 +179,22 @@ jobs:
           set -eux
           TAG="${{ steps.package.outputs.tag }}"
           STAGING="${{ steps.package.outputs.staging }}"
+          IPFS_API="http://127.0.0.1:5001/api/v0"
 
-          # ipfs add each artifact and capture CIDs
+          # Add each artifact via the kubo HTTP API and capture CIDs.
+          # The ipfs CLI requires a local repo; the HTTP API does not.
           declare -A CIDS
           for f in Image pocketforge_tsp.dtb "modules-${TAG}.tar.xz" SHA256SUMS; do
-            CID=$(ipfs add --quieter --cid-version=1 "$STAGING/$f")
+            CID=$(curl -sf -X POST -F "file=@${STAGING}/${f}" \
+              "${IPFS_API}/add?cid-version=1&quieter=true" \
+              | python3 -c 'import sys,json; print(json.load(sys.stdin)["Hash"])')
             CIDS["$f"]="$CID"
             echo "$f -> $CID"
           done
 
           # Pin all CIDs
           for CID in "${CIDS[@]}"; do
-            ipfs pin add "$CID"
+            curl -sf -X POST "${IPFS_API}/pin/add?arg=${CID}" > /dev/null
           done
 
           # Write CID map for the vendor-manifest update step
