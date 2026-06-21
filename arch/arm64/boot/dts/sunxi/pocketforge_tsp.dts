@@ -3180,6 +3180,7 @@
 				};
 
 				regulators@0 {
+					compatible = "x-powers,axp2202-regulator";
 					linux,phandle = <0x16d>;
 					phandle = <0x16d>;
 
@@ -3285,6 +3286,13 @@
 						regulator-min-microvolt = <0x7a120>;
 						regulator-max-microvolt = <0x3567e0>;
 						regulator-enable-ramp-delay = <0x3e8>;
+						/* PocketForge: WiFi (XR829) power supply.
+						 * The sunxi-wlan driver's regulator_get(dev, "axp2202-bldo1")
+						 * fails to find this regulator via the standard consumer API
+						 * (no axp2202-bldo1-supply phandle on the wlan@0 node).
+						 * Force always-on so the WiFi chip has power regardless. */
+						regulator-always-on;
+						regulator-boot-on;
 						linux,phandle = <0x52>;
 						phandle = <0x52>;
 					};
@@ -5113,14 +5121,19 @@
 			pinctrl-names;
 			wlan_busnum = <0x01>;
 			wlan_power_num = <0x01>;
-			wlan_power1 = "axp2202-bldo1";
-			wlan_io_regulator = "axp2202-aldo3";
+			wlan_power1 = "bldo1";
+			wlan_io_regulator = "aldo3";
 			wlan_io_voltage = <0x325aa0>;
 			wlan_regon = <0x61 0x0b 0x05 0x01 0xffffffff 0xffffffff 0x00>;
 			wlan_hostwake = <0x61 0x0b 0x06 0x06 0xffffffff 0xffffffff 0x00>;
 			chip_en;
 			power_en;
 			status = "okay";
+			/* PocketForge: this BSP's axp2101 regulator driver does not
+			 * reliably resolve the vendor's axp2202-* consumer IDs. Use the
+			 * regulator descriptor names plus matching consumer phandles. */
+			bldo1-supply = <0x52>;
+			aldo3-supply = <0x50>;
 			linux,phandle = <0x1b7>;
 			phandle = <0x1b7>;
 		};
@@ -5129,11 +5142,14 @@
 			compatible = "allwinner,sunxi-bt";
 			clocks = <0x16 0xfd>;
 			bt_power_num = <0x01>;
-			bt_power1 = "axp2202-bldo1";
-			bt_io_regulator = "axp2202-aldo3";
+			bt_power1 = "bldo1";
+			bt_io_regulator = "aldo3";
 			bt_io_voltage = <0x325aa0>;
 			bt_rst_n = <0x61 0x0b 0x02 0x01 0xffffffff 0xffffffff 0x00>;
 			status = "okay";
+			/* PocketForge: same regulator consumer fix as wlan@0. */
+			bldo1-supply = <0x52>;
+			aldo3-supply = <0x50>;
 			linux,phandle = <0x1b8>;
 			phandle = <0x1b8>;
 		};
