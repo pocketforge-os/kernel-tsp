@@ -2347,6 +2347,20 @@ void xradio_join_work(struct work_struct *work)
 			cancel_delayed_work_sync(&priv->join_timeout);
 		} else {
 			/* Upload keys */
+			/*
+			 * PocketForge (tsp-rcb): restore the post-join key re-upload
+			 * that mainline cw1200 (xradio's parent driver) does here. The
+			 * xradio fork kept this "Upload keys" comment but DROPPED the
+			 * call, leaving xradio_upload_keys() dead. Firmware key state
+			 * does not survive the join/reset (a re-join runs
+			 * unjoin->wsm_reset), and the dummy->real sta promotion does NOT
+			 * re-push keys — so an 802.11r FT PTK installed BEFORE the join
+			 * (see the FT pre-assoc dummy-sta fix in umac/mlme.c) would be
+			 * lost after reassociation. The host key cache
+			 * (hw_priv->keys/key_map) already holds it; re-push it now that
+			 * the link is synced. No-op on a fresh connect (empty key_map).
+			 */
+			xradio_upload_keys(priv);
 #ifdef CONFIG_XRADIO_TESTMODE
 			xradio_queue_requeue(hw_priv, queue,
 				hw_priv->pending_frame_id, true);

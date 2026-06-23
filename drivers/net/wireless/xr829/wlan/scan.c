@@ -506,7 +506,12 @@ void xradio_scan_work(struct work_struct *work)
 #endif
 
 		.scanFlags = 0, /* TODO:COMBO */
-		/*.scanFlags = WSM_SCAN_FLAG_SPLIT_METHOD, */
+		/* PocketForge (tsp-rcb): split-scan is NOT set globally here.
+		 * Under SUPPORT_HT40 the type+flags are packed into scanFlags
+		 * via SET_SCAN_*; WSM_SCAN_FLAG_SPLIT_METHOD is set further down
+		 * only for the associated (join_status==STA) background scan,
+		 * where minimizing data-path disturbance matters. The cold-boot
+		 * foreground scan is left non-split (no link to protect). */
 	};
 	bool first_run;
 	int i;
@@ -768,11 +773,21 @@ void xradio_scan_work(struct work_struct *work)
 
 			SET_SCAN_TYPE(&scan.scanFlags, WSM_SCAN_TYPE_BACKGROUND);
 			SET_SCAN_FLAG(&scan.scanFlags, WSM_SCAN_FLAG_FORCE_BACKGROUND);
+			/* PocketForge (tsp-rcb): when associated, scan one
+			 * channel at a time so the off-channel excursion does
+			 * not stall the data path. Without this the firmware
+			 * sweeps all channels in one go and starves an active
+			 * stream (root cause of the multi-second roam outage
+			 * measured in the house->woods walk). Enabled only for
+			 * the associated/background case so the cold-boot
+			 * foreground scan (no link to protect) is unchanged. */
+			SET_SCAN_FLAG(&scan.scanFlags, WSM_SCAN_FLAG_SPLIT_METHOD);
 
 #else
 
 			scan.scanType = WSM_SCAN_TYPE_BACKGROUND;
-			scan.scanFlags = WSM_SCAN_FLAG_FORCE_BACKGROUND;
+			scan.scanFlags = WSM_SCAN_FLAG_FORCE_BACKGROUND |
+					 WSM_SCAN_FLAG_SPLIT_METHOD;
 
 #endif
 		}

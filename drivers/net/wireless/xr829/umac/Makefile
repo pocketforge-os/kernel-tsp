@@ -67,5 +67,14 @@ ccflags-y += -D__CHECK_ENDIAN__
 # in the probe response template
 ccflags-y += -DPROBE_RESP_EXTRA_IE
 ccflags-y += -DIPV6_FILTERING
+# PocketForge (tsp-rcb): host-side reassociation-latency optimization (TX-queue
+# lock during auth/assoc + deferred HW key teardown while roaming).
+# DISABLED 2026-06-22: enabling it OOPSed the kernel in __ieee80211_key_destroy
+# (umac/key.c:459-488) during nl80211_new_key — the change adds a non-blocking
+# call_rcu() key-free path taken whenever ifmgd->roaming==1 (set on every reassoc,
+# mlme.c:2851), which races key teardown on this fork and floods "[RX] No key
+# found" -> unjoin -> WiFi down. The vendor shipped it disabled for a reason.
+# Re-enabling needs a targeted fix to that async-free path (NOT all-or-nothing);
+# tracked as follow-up under tsp-rcb. Split-scan (wlan/scan.c) + FT-PSK are kept.
 #ccflags-y += -DCONFIG_XRMAC_XR_ROAMING_CHANGES
 ccflags-y += -DUSE_RSSI_SMOOTH

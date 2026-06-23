@@ -174,6 +174,48 @@ static int ieee80211_add_key(struct wiphy *wiphy, struct net_device *dev,
 			sta = xrmac_sta_info_get(sdata, mac_addr);
 		else
 			sta = xrmac_sta_info_get_bss(sdata, mac_addr);
+		if (!sta && pairwise &&
+		    sdata->vif.type == NL80211_IFTYPE_STATION) {
+			/*
+			 * PocketForge (tsp-rcb): 802.11r FT over-the-air installs the
+			 * pairwise PTK for the TARGET AP BEFORE association. The FT auth
+			 * is a "local state change", so no sta_info for the target exists
+			 * yet and this lookup misses -> the key install fails with
+			 * -ENOENT ("FT: Failed to set PTK to the driver") and the roam
+			 * falls back to a full 4-way. In STA mode a pairwise key keyed to
+			 * a MAC is always the AP PTK, so create the dummy AP sta ON DEMAND
+			 * right here, at the exact point of need, and link the key to it
+			 * (same dummy mechanism as ieee80211_pre_assoc; mainline mac80211
+			 * already has the sta by this point). assoc-success promotes this
+			 * dummy -- with the PTK linked -- to the real sta, and
+			 * xradio_upload_keys() at join re-pushes the key past the fw
+			 * reset. xrmac_sta_info_insert() takes sta_mtx, so drop it across
+			 * the insert and re-look-up afterwards.
+			 */
+			struct sta_info *dummy;
+
+			mutex_unlock(&sdata->local->sta_mtx);
+			dummy = xrmac_sta_info_alloc(sdata, mac_addr, GFP_KERNEL);
+			if (dummy) {
+				dummy->dummy = true;
+				xrmac_sta_info_insert(dummy); /* consumes/frees dummy */
+			}
+			mutex_lock(&sdata->local->sta_mtx);
+			/*
+			 * PocketForge (tsp-rcb build #7): the dummy was inserted
+			 * with sta->dummy=true, so it is ONLY findable via a
+			 * dummy-aware accessor. xrmac_sta_info_get_bss() (used by
+			 * build #6) filters out dummy stas -- its loop tests
+			 * !sta->dummy -- so the re-lookup missed and we still
+			 * returned -ENOENT. xrmac_sta_info_get_bss_rx() is the
+			 * identical accessor WITHOUT the !dummy filter, so it
+			 * returns the freshly-inserted dummy. xradio_set_key()
+			 * programs a pairwise key from sta->addr alone (no
+			 * firmware peer/link_id needed), so the PTK installs
+			 * pre-association -> seamless FT (no post-assoc retry).
+			 */
+			sta = xrmac_sta_info_get_bss_rx(sdata, mac_addr);
+		}
 		if (!sta) {
 			mac80211_key_free(sdata->local, key);
 			err = -ENOENT;
