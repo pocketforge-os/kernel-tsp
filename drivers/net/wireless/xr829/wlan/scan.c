@@ -609,15 +609,26 @@ void xradio_scan_work(struct work_struct *work)
 		} else {
 #endif
 
-#if 0
+			/*
+			 * tsp-q75: announce power-save to the AP before the
+			 * off-channel scan excursion, and restore it after (see the
+			 * paired restore in the scan-complete block below). On this
+			 * single-radio chip the firmware expects to be in PS during
+			 * an off-channel period; the vendor #if 0'd this (mainline
+			 * cw1200, xradio's parent, does it), so a background scan
+			 * went off-channel while still advertising ACTIVE PM -- the
+			 * AP kept transmitting to us, we missed acks off-channel, and
+			 * the firmware was left wedged afterwards (every data TX ->
+			 * WSM_STATUS_RETRY_EXCEEDED, no self-recovery without a radio
+			 * reset). Setting PS makes the AP buffer for us and puts the
+			 * fw in the expected off-channel state.
+			 */
 			if (priv->join_status == XRADIO_JOIN_STATUS_STA &&
 			    !(priv->powersave_mode.pmMode & WSM_PSM_PS)) {
 				struct wsm_set_pm pm = priv->powersave_mode;
 				pm.pmMode = WSM_PSM_PS;
 				xradio_set_pm(priv, &pm);
-			} else
-#endif
-			if (priv->join_status == XRADIO_JOIN_STATUS_MONITOR) {
+			} else if (priv->join_status == XRADIO_JOIN_STATUS_MONITOR) {
 				/* FW bug: driver has to restart p2p-dev mode
 				 * after scan */
 				xradio_disable_listening(priv);
@@ -663,11 +674,15 @@ void xradio_scan_work(struct work_struct *work)
 		}
 #endif
 
-#if 0
+		/*
+		 * tsp-q75: restore PM (ACTIVE) after the off-channel scan --
+		 * pairs with the pre-scan PS announcement in the first_run block
+		 * above so the AP resumes sending to us and the radio returns to
+		 * the active home-channel state once scanning completes.
+		 */
 		if (priv->join_status == XRADIO_JOIN_STATUS_STA &&
 		    !(priv->powersave_mode.pmMode & WSM_PSM_PS))
 			xradio_set_pm(priv, &priv->powersave_mode);
-#endif
 
 		if (hw_priv->scan.status < 0)
 			scan_printk(XRADIO_DBG_ERROR, "Scan failed (%d).\n",

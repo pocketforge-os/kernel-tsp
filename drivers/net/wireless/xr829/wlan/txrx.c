@@ -3203,12 +3203,33 @@ drop:
 /* ******************************************************************** */
 /* Security								*/
 
-int xradio_alloc_key(struct xradio_common *hw_priv)
+int xradio_alloc_key(struct xradio_common *hw_priv, bool pairwise)
 {
 	int idx;
+	u32 map = hw_priv->key_map;
 	txrx_printk(XRADIO_DBG_TRC, "%s\n", __func__);
 
-	idx = ffs(~hw_priv->key_map) - 1;
+	/*
+	 * tsp-q75: reserve firmware key slot 0 for the PAIRWISE (PTK) key.
+	 * The driver allocates fw key slots dynamically (ffs(~key_map)). On a
+	 * roam the stale old-AP PTK can still occupy slot 0 when mac80211
+	 * installs the NEW PTK (mac80211 adds the new key before disabling the
+	 * old one), so the new PTK is pushed to slot 1; the stale key's later
+	 * DISABLE then frees slot 0 and the new GTK reuses it -> PTK/GTK fw
+	 * slots INVERTED vs the canonical PTK0/GTK1 layout -> firmware
+	 * WSM_STATUS_NO_KEY_FOUND on every RX = the intermittent roam wedge
+	 * (captured under tsp-q75 build #10/#11). Keeping group keys out of
+	 * slot 0 makes the inversion impossible: a group key can never land in
+	 * the pairwise key's canonical slot, regardless of mac80211's
+	 * add-new-before-remove-old ordering. We must NOT free the stale key's
+	 * slot here instead: mac80211 frees by the hw_key_idx it stored at
+	 * SET_KEY, so freeing early would let a reused slot be clobbered by the
+	 * stale key's later DISABLE.
+	 */
+	if (!pairwise)
+		map |= BIT(0);
+
+	idx = ffs(~map) - 1;
 	if (idx < 0 || idx > WSM_KEY_MAX_INDEX)
 		return -1;
 
@@ -3244,7 +3265,40 @@ int xradio_upload_keys(struct xradio_vif *priv)
 
 	for (idx = 0; idx <= WSM_KEY_MAX_IDX; ++idx)
 		if (hw_priv->key_map & BIT(idx)) {
-			ret = wsm_add_key(hw_priv, &hw_priv->keys[idx], priv->if_id);
+			struct wsm_add_key *k = &hw_priv->keys[idx];
+			const u8 *peer = NULL;
+
+			/*
+			 * tsp-q75: do NOT re-push a stale key on (re)join. The
+			 * driver allocates fw key slots dynamically (ffs(~key_map),
+			 * xradio_alloc_key) and on a roam the key_map can still hold
+			 * the PREVIOUS AP's pairwise key (mac80211 DISABLE_KEY
+			 * ordering vs join_work varies). Re-pushing it here scrambles
+			 * the firmware key table for the new AP -> WSM_STATUS_
+			 * NO_KEY_FOUND on RX + RETRY_EXCEEDED on TX = the intermittent
+			 * roam wedge (captured under tsp-q75 build #10). Only re-push
+			 * a PAIRWISE key whose peer is the AP we are (re)joining:
+			 * that preserves the 802.11r FT pre-association PTK (peer ==
+			 * new AP -- the reason this re-push was restored for FT) while
+			 * dropping stale old-AP keys. Group keys carry no peer and are
+			 * reinstalled by the (re)association key handshake, so they
+			 * are not re-pushed here.
+			 */
+			switch (k->type) {
+			case WSM_KEY_TYPE_WEP_PAIRWISE:
+				peer = k->wepPairwiseKey.peerAddress; break;
+			case WSM_KEY_TYPE_TKIP_PAIRWISE:
+				peer = k->tkipPairwiseKey.peerAddress; break;
+			case WSM_KEY_TYPE_AES_PAIRWISE:
+				peer = k->aesPairwiseKey.peerAddress; break;
+			case WSM_KEY_TYPE_WAPI_PAIRWISE:
+				peer = k->wapiPairwiseKey.peerAddress; break;
+			default:
+				break;
+			}
+			if (!peer || memcmp(peer, priv->join_bssid, ETH_ALEN))
+				continue;
+			ret = wsm_add_key(hw_priv, k, priv->if_id);
 			if (ret < 0)
 				break;
 		}

@@ -1029,7 +1029,7 @@ int xradio_set_key(struct ieee80211_hw *dev, enum set_key_cmd cmd,
 	if (cmd == SET_KEY) {
 		u8 *peer_addr = NULL;
 		int pairwise = (key->flags & IEEE80211_KEY_FLAG_PAIRWISE) ? 1 : 0;
-		int idx = xradio_alloc_key(hw_priv);
+		int idx = xradio_alloc_key(hw_priv, pairwise);
 		struct wsm_add_key *wsm_key = &hw_priv->keys[idx];
 
 		if (idx < 0) {
@@ -2045,7 +2045,22 @@ void xradio_join_work(struct work_struct *work)
 	const struct ieee80211_tim_ie *tim = NULL;
 	struct wsm_protected_mgmt_policy mgmt_policy;
 	struct wsm_operational_mode mode = {
-		.power_mode = wsm_power_mode_quiescent,
+		/*
+		 * tsp-q75: keep the device AWAKE while associated as a STA.
+		 * The vendor default (wsm_power_mode_quiescent) lets the
+		 * firmware deep-sleep between beacons while wpa_supplicant
+		 * advertises ACTIVE 802.11 PM to the AP (pmMode stays
+		 * WSM_PSM_ACTIVE in STA mode) -- the AP therefore does NOT
+		 * buffer for us, but the napping radio misses acks on its
+		 * home channel and the AP disassociates us with reason 34
+		 * (DISASSOC_LOW_ACK) at perfectly fine signal (-66..-73 dBm),
+		 * killing the link mid-walk before FT roaming can fire.
+		 * Forcing active here matches the device sleep state to the
+		 * advertised PM. Idle/disconnected power is unaffected: the
+		 * init/reinit/unjoin/remove paths still use quiescent, so the
+		 * radio only stays awake while actively joined to an AP.
+		 */
+		.power_mode = wsm_power_mode_active,
 		.disableMoreFlagUsage = true,
 	};
 	/*

@@ -204,7 +204,7 @@ void xradio_tx_timeout(struct work_struct *work);
 
 /* ******************************************************************** */
 /* Security								*/
-int xradio_alloc_key(struct xradio_common *hw_priv);
+int xradio_alloc_key(struct xradio_common *hw_priv, bool pairwise);
 void xradio_free_key(struct xradio_common *hw_priv, int idx);
 void xradio_free_keys(struct xradio_common *hw_priv);
 int xradio_upload_keys(struct xradio_vif *priv);
