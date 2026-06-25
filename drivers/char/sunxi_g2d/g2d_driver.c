@@ -483,6 +483,22 @@ int g2d_mmap(struct file *file, struct vm_area_struct *vma)
 	return 0;
 }
 
+/*
+ * g2d_is_ready - report whether the g2d platform device has probed.
+ *
+ * para.io is set (of_iomap) only in g2d_probe(), and para.mutex is
+ * mutex_init()'d there too. Callers in the disp fb rotation path
+ * (fb_g2d_rot_create -> g2d_open) run as early as disp_probe
+ * (subsys_initcall_sync), which can precede g2d's platform probe; calling
+ * g2d_open() before then mutex_lock()s an uninitialised mutex and NULL-derefs.
+ * Use this to defer those calls until g2d is actually ready.
+ */
+bool g2d_is_ready(void)
+{
+	return para.io != NULL;
+}
+EXPORT_SYMBOL_GPL(g2d_is_ready);
+
 int g2d_open(struct inode *inode, struct file *file)
 {
 	mutex_lock(&para.mutex);

@@ -17,6 +17,7 @@
 #include "fb_g2d_rot.h"
 
 extern int g2d_blit_h(g2d_blt_h *para);
+extern bool g2d_is_ready(void);
 extern  int g2d_open(struct inode *inode, struct file *file);
 extern  int g2d_release(struct inode *inode, struct file *file);
 extern void g2d_ioctl_mutex_lock(void);
@@ -204,6 +205,17 @@ struct fb_g2d_rot_t *fb_g2d_rot_create(struct fb_info *p_info,
 		return NULL;
 	}
 
+	/*
+	 * g2d may not have probed yet when this is first reached from
+	 * disp_probe (subsys_initcall_sync) at boot. Calling g2d_open()
+	 * before g2d is ready NULL-derefs para.mutex (kernel panic). Defer:
+	 * return NULL now; the fb pan path lazily retries once g2d is ready.
+	 */
+	if (!g2d_is_ready()) {
+		pr_warn("g2d not ready yet, deferring fb rotation create\n");
+		return NULL;
+	}
+
 	ret = disp_sys_script_get_item("disp", "disp_rotation_used", &value, 1);
 	if (ret != 1)
 		value = 0;
@@ -360,7 +372,6 @@ struct fb_g2d_rot_t *fb_g2d_rot_create(struct fb_info *p_info,
 	fb_rot->apply = fb_g2d_rot_apply;
 	fb_rot->free = fb_g2d_rot_free;
 	fb_rot->set_degree = fb_g2d_set_degree;
-
 
 	return fb_rot;
 

@@ -16,6 +16,7 @@
 #include "de/disp_edp.h"
 #endif /*endif defined(SUPPORT_EDP) */
 #include "fb_g2d_rot.h"
+extern bool g2d_is_ready(void);
 #include <linux/decompress/unlzma.h>
 #include <linux/ion_sunxi.h>
 #include <linux/dma-buf.h>
@@ -46,6 +47,7 @@ struct fb_info_t {
 	u32 vsync_timestamp_tail[DISP_SCREEN_NUM];
 
 	struct fb_g2d_rot_t *fb_rot[FB_MAX];
+	bool fb_rot_tried[FB_MAX];	/* lazy create attempted (g2d-ready) */
 	int mem_cache_flag[SUNXI_FB_MAX];
 
 	int blank[3];
@@ -735,6 +737,23 @@ static int sunxi_fb_pan_display(struct fb_var_screeninfo *var,
 				}
 #endif
 #if defined(CONFIG_SUNXI_DISP2_FB_HW_ROTATION_SUPPORT)
+				/*
+				 * Lazy create: the boot-time create in
+				 * display_fb_request() bails out while g2d is
+				 * still un-probed (panic-safe). Retry here once
+				 * g2d is ready -- this is the first pan from a
+				 * real producer (dc_sunxi/GL or fbcon), so g2d
+				 * has probed by now. Attempt exactly once
+				 * (fb_rot_tried) so an unconfigured fb does not
+				 * re-probe + log-spam on every pan.
+				 */
+				if (!g_fbi.fb_rot[sel] &&
+				    !g_fbi.fb_rot_tried[sel] &&
+				    g2d_is_ready()) {
+					g_fbi.fb_rot[sel] = fb_g2d_rot_create(
+						info, info->node, &config);
+					g_fbi.fb_rot_tried[sel] = true;
+				}
 				if (g_fbi.fb_rot[sel])
 					g_fbi.fb_rot[sel]->apply(g_fbi.fb_rot[sel], &config);
 #endif
@@ -1392,8 +1411,11 @@ static int sunxi_fb_ioctl(struct fb_info *info, unsigned int cmd,
 
 			fb_unmap_video_memory(fbinfo);
 #if defined(CONFIG_SUNXI_DISP2_FB_HW_ROTATION_SUPPORT)
-			if (g_fbi.fb_rot[fb_id])
+			if (g_fbi.fb_rot[fb_id]) {
 				g_fbi.fb_rot[fb_id]->free(g_fbi.fb_rot[fb_id]);
+				g_fbi.fb_rot[fb_id] = NULL;
+				g_fbi.fb_rot_tried[fb_id] = false;
+			}
 #endif
 
 			/* unbound fb0 from layer(1,0)  */
@@ -2386,8 +2408,11 @@ static s32 display_fb_release(u32 fb_id)
 #endif
 		fb_unmap_video_memory(info);
 #if defined(CONFIG_SUNXI_DISP2_FB_HW_ROTATION_SUPPORT)
-		if (g_fbi.fb_rot[fb_id])
+		if (g_fbi.fb_rot[fb_id]) {
 			g_fbi.fb_rot[fb_id]->free(g_fbi.fb_rot[fb_id]);
+			g_fbi.fb_rot[fb_id] = NULL;
+			g_fbi.fb_rot_tried[fb_id] = false;
+		}
 #endif
 
 		return 0;
