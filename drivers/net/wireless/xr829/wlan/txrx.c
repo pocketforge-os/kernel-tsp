@@ -12,6 +12,7 @@
 #include <net/mac80211.h>
 #include <linux/etherdevice.h>
 #include <linux/skbuff.h>
+#include <linux/module.h>	/* [urq] module_param_named, S_IRUGO/S_IWUSR */
 
 #include "xradio.h"
 #include "wsm.h"
@@ -1933,6 +1934,24 @@ void xradio_get_ieee80211_tx_rate(struct xradio_common *hw_priv,
 
 #endif
 
+/* [urq] tsp-urq TX-health watchdog knobs.
+ * tx_wedge_thresh: N consecutive RETRY_EXCEEDED TX-confirms (no success in between)
+ *   that constitute a TX-death wedge -> trigger recovery. 0 disables. Tunable.
+ * tx_inject_retry: [urq-dbg, test-only] force the next N confirms to count as
+ *   RETRY_EXCEEDED so the watchdog can be exercised on the bench. REMOVE before
+ *   the final commit (keep tx_wedge_thresh + the watchdog). */
+static int tx_wedge_thresh = 40;
+module_param_named(tx_wedge_thresh, tx_wedge_thresh, int, S_IRUGO | S_IWUSR);
+static int tx_inject_retry;
+module_param_named(tx_inject_retry, tx_inject_retry, int, S_IRUGO | S_IWUSR);
+/* tx_stall_ms: TX-progress watchdog (catches the FROZEN-TX wedge that produces no
+ * confirm stream at all - the counter above is blind to it). Checked in the BH loop:
+ * frames in-flight to fw (hw_bufs_used>0) with NO confirm for this long == wedge. 0
+ * disables. Tunable. */
+static int tx_stall_ms = 4000;
+module_param_named(tx_stall_ms, tx_stall_ms, int, S_IRUGO | S_IWUSR);
+int xradio_tx_stall_ms(void) { return tx_stall_ms; }	/* read from bh.c */
+
 void xradio_tx_confirm_cb(struct xradio_common *hw_priv,
 			  struct wsm_tx_confirm *arg)
 {
@@ -1965,6 +1984,37 @@ void xradio_tx_confirm_cb(struct xradio_common *hw_priv,
 	}
 
 #endif
+
+	/* [urq] tsp-urq TX-health watchdog: the marginal-signal TX-death wedge shows up
+	 * here as a sustained run of WSM_STATUS_RETRY_EXCEEDED (status=6) confirms with
+	 * NO successful TX in between - the firmware stops getting ACKs but the BH thread
+	 * stays alive, so no bh_error is ever set and the existing recovery never fires
+	 * -> the link is TX-dead until a reboot. Detect the streak and convert it into a
+	 * fatal bh_error; the BH loop then exits into the recovery path (hw_restart_work
+	 * -> core_reinit, incl. the self-heal branch) and re-inits the radio in ~seconds,
+	 * no reboot. A single successful TX resets the streak, so normal transient retry
+	 * at marginal signal does not trip it. */
+	{
+		int urq_st = arg->status;
+		hw_priv->tx_last_confirm = jiffies;	/* [urq] TX-progress watchdog heartbeat */
+		if (unlikely(tx_inject_retry > 0)) {	/* [urq-dbg] test knob */
+			tx_inject_retry--;
+			urq_st = WSM_STATUS_RETRY_EXCEEDED;
+		}
+		if (urq_st == WSM_STATUS_RETRY_EXCEEDED) {
+			if (tx_wedge_thresh > 0 &&
+			    ++hw_priv->tx_retry_streak >= tx_wedge_thresh &&
+			    !hw_priv->bh_error) {
+				txrx_printk(XRADIO_DBG_ERROR,
+					"[urq] TX wedge: %d consecutive RETRY_EXCEEDED -> bh_error for recovery\n",
+					hw_priv->tx_retry_streak);
+				hw_priv->tx_retry_streak = 0;
+				hw_priv->bh_error = __LINE__;
+			}
+		} else if (urq_st == WSM_STATUS_SUCCESS) {
+			hw_priv->tx_retry_streak = 0;
+		}
+	}
 
 #ifdef TES_P2P_0002_ROC_RESTART
 	if ((TES_P2P_0002_state == TES_P2P_0002_STATE_GET_PKTID) &&

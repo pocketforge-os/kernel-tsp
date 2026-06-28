@@ -271,6 +271,9 @@ struct xradio_common {
 	const struct sbus_ops		*sbus_ops;
 	struct sbus_priv		*sbus_priv;
 	int 			driver_ready;
+	int			tx_retry_streak;	/* [urq] tsp-urq TX-health watchdog: consecutive RETRY_EXCEEDED confirms */
+	unsigned long		tx_last_confirm;	/* [urq] tsp-urq TX-progress watchdog: jiffies of the last TX confirm (any status) */
+	/* [urq] tsp-urq: tx_stall_ms accessor (param lives in txrx.c) - see bh.c stall check */
 
 	/* HW/FW type (HIF_...) */
 	int				hw_type;

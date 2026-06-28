@@ -100,9 +100,20 @@ static irqreturn_t xradio_gpio_irq_handler(int irq, void *sbus_priv)
 int xradio_request_gpio_irq(struct device *dev, void *sbus_priv)
 {
 	int ret = -1;
+	/* [urq] tsp-urq.2 (M5) PREVENTION FIX: the OOB host-wake GPIO is LEVEL-HIGH per
+	 * the BSP (sunxi_wlan_get_oob_irq_flags() -> IRQF_TRIGGER_HIGH|SHARED|NO_SUSPEND),
+	 * but this code hardcoded IRQF_TRIGGER_RISING (edge) and never called the flags fn
+	 * it even extern-declares. A level-high line serviced as rising-edge silently
+	 * MISSES RX data-ready assertions -> the [BH_WRN] "miss interrupt!" flood -> the
+	 * 125ms polling fallback -> lossy link / capped throughput even at -39dBm (measured
+	 * live: xradio_irq advanced +3 under a 5000-pkt RX flood vs sunxi-mmc1 +123k). Use
+	 * the BSP's intended flags so the OOB IRQ actually fires. */
+	int oob_flags = sunxi_wlan_get_oob_irq_flags();
+	if (!oob_flags)
+		oob_flags = IRQF_TRIGGER_HIGH | IRQF_SHARED | IRQF_NO_SUSPEND;
 	ret = devm_request_irq(dev, gpio_irq_handle,
 					(irq_handler_t)xradio_gpio_irq_handler,
-					IRQF_TRIGGER_RISING|IRQF_NO_SUSPEND, "xradio_irq", sbus_priv);
+					oob_flags, "xradio_irq", sbus_priv);
 	if (IS_ERR_VALUE((long)ret)) {
 			gpio_irq_handle = 0;
 			xradio_dbg(XRADIO_DBG_ERROR, "%s: request_irq FAIL!ret=%d\n",

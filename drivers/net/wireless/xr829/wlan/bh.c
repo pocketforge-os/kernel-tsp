@@ -11,6 +11,7 @@
 
 #include <net/mac80211.h>
 #include <linux/kthread.h>
+#include <linux/module.h>	/* [urq-dbg] module_param_named, S_IRUGO/S_IWUSR */
 
 #include "xradio.h"
 #include "bh.h"
@@ -1256,6 +1257,16 @@ u32  tx_limit_cnt5;
 u32  tx_limit_cnt6;
 
 
+/* [urq-dbg] tsp-urq.1 / infra-023 M6 experimental knobs — REMOVE before final commit.
+ * bh_inject : write 1 -> inject a fatal bh_error to exercise the recovery path.
+ * bh_selfheal: 1 -> M6 fix (non-blocking direct hw_restart_work schedule, skip the
+ *              blocking wsm_upper_restart lock-dance); 0 -> legacy behavior. */
+static int xradio_bh_inject;
+module_param_named(bh_inject, xradio_bh_inject, int, S_IRUGO | S_IWUSR);
+static int xradio_bh_selfheal = 1;	/* keep the self-heal fix ON by default (tsp-urq.1) */
+module_param_named(bh_selfheal, xradio_bh_selfheal, int, S_IRUGO | S_IWUSR);
+int xradio_tx_stall_ms(void);	/* [urq] tsp-urq TX-progress watchdog threshold (defined in txrx.c) */
+
 static int xradio_bh(void *arg)
 {
 	struct xradio_common *hw_priv = arg;
@@ -1292,8 +1303,31 @@ static int xradio_bh(void *arg)
 			__func__, ret);
 
 	PERF_INFO_GETTIME(&last_showtime);
+	hw_priv->tx_last_confirm = jiffies;	/* [urq] seed the TX-progress watchdog heartbeat */
 	for (;;) {
 		PERF_INFO_GETTIME(&bh_start_time);
+		/* [urq-dbg] on-demand fatal bh_error injection (test recovery path). */
+		if (unlikely(xradio_bh_inject)) {
+			xradio_bh_inject = 0;
+			bh_printk(XRADIO_DBG_ERROR, "[urq-dbg] INJECT fatal bh_error\n");
+			hw_priv->bh_error = __LINE__;
+		}
+		/* [urq] TX-progress watchdog: frames are in-flight to the firmware
+		 * (hw_bufs_used>0) but NO TX confirm has arrived for tx_stall_ms - the
+		 * frozen-TX wedge that emits no confirm stream (the status=6 counter in
+		 * txrx.c is blind to it). Convert to a fatal bh_error so the recovery
+		 * path (hw_restart_work -> core_reinit, incl. self-heal) re-inits the
+		 * radio. Only fires when there is unconfirmed TX, so idle != wedge. */
+		{
+			int urq_sms = xradio_tx_stall_ms();
+			if (urq_sms > 0 && hw_priv->hw_bufs_used > 0 && !hw_priv->bh_error &&
+			    time_after(jiffies, hw_priv->tx_last_confirm + msecs_to_jiffies(urq_sms))) {
+				bh_printk(XRADIO_DBG_ERROR,
+					"[urq] TX stall: %d in-flight, no confirm for %dms -> bh_error for recovery\n",
+					hw_priv->hw_bufs_used, urq_sms);
+				hw_priv->bh_error = __LINE__;
+			}
+		}
 		/* Check if devices can sleep, and set time to wait for interrupt. */
 		if (!hw_priv->hw_bufs_used && !pending_tx &&
 		    hw_priv->powersave_enabled && !hw_priv->device_can_sleep &&
@@ -2027,11 +2061,41 @@ tx:
 	if (!term) {
 		bh_printk(XRADIO_DBG_ERROR, "Fatal error, exitting code=%d.\n",
 			  hw_priv->bh_error);
+		bh_printk(XRADIO_DBG_ERROR,
+			  "[urq-dbg] FATAL exit: bh_suspend=%d driver_ready=%d "
+			  "rpending=%d rrunning=%d selfheal=%d\n",
+			  atomic_read(&hw_priv->bh_suspend), hw_priv->driver_ready,
+			  work_pending(&hw_priv->hw_restart_work),
+			  hw_priv->hw_restart_work_running, xradio_bh_selfheal);
 
 #ifdef SUPPORT_FW_DBG_INF
 		xradio_fw_dbg_dump_in_direct_mode(hw_priv);
 #endif
 
+		/*
+		 * tsp-urq.1 / infra-023 M6 self-recovery.
+		 * Legacy path (wsm_upper_restart, the else branch) takes a BLOCKING
+		 * down(&scan.lock)+down(&conf_lock) from this dying BH thread. If the
+		 * BH died mid-scan (the marginal roam/scan-churn wedge) scan.lock is
+		 * held by a scan that can never complete -> down() blocks forever ->
+		 * recovery never schedules -> link dead until reboot. The self-heal
+		 * branch schedules the existing hw_restart_work DIRECTLY (non-blocking,
+		 * same guard as wsm.c) so recovery is queued regardless of scan state;
+		 * restart_work -> xradio_unregister_bh() -> kthread_stop() then reaps
+		 * this interruptibly-parked thread and xradio_core_reinit() re-assocs.
+		 */
+		if (xradio_bh_selfheal) {
+			if (hw_priv->driver_ready && !hw_priv->exit_sync &&
+			    !work_pending(&hw_priv->hw_restart_work) &&
+			    !hw_priv->hw_restart_work_running) {
+				bh_printk(XRADIO_DBG_ERROR,
+					  "[urq] BH fatal: schedule hw_restart_work (self-heal)\n");
+				schedule_work(&hw_priv->hw_restart_work);
+			} else {
+				bh_printk(XRADIO_DBG_ERROR,
+					  "[urq] BH fatal: self-heal SKIPPED (guard)\n");
+			}
+		} else {
 #ifdef HW_ERROR_WIFI_RESET
 		/* notify upper layer to restart wifi.
 		 * don't do it in debug version. */
@@ -2039,13 +2103,17 @@ tx:
 		/* we should restart manually in etf mode.*/
 		if (!etf_is_connect() &&
 			XRADIO_BH_RESUMED == atomic_read(&hw_priv->bh_suspend)) {
+			bh_printk(XRADIO_DBG_ERROR, "[urq-dbg] legacy wsm_upper_restart\n");
 			wsm_upper_restart(hw_priv);
 		}
 #else
-		if (XRADIO_BH_RESUMED == atomic_read(&hw_priv->bh_suspend))
+		if (XRADIO_BH_RESUMED == atomic_read(&hw_priv->bh_suspend)) {
+			bh_printk(XRADIO_DBG_ERROR, "[urq-dbg] legacy wsm_upper_restart\n");
 			wsm_upper_restart(hw_priv);
+		}
 #endif
 #endif
+		}
 		/* TODO: schedule_work(recovery) */
 #ifndef HAS_PUT_TASK_STRUCT
 		/* The only reason of having this stupid code here is
