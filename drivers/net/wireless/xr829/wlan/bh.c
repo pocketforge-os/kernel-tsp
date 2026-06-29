@@ -12,6 +12,11 @@
 #include <net/mac80211.h>
 #include <linux/kthread.h>
 #include <linux/module.h>	/* [urq-dbg] module_param_named, S_IRUGO/S_IWUSR */
+#include <linux/sched.h>	/* tsp-wifi: flush_signals/signal_pending (4.9) */
+
+/* tsp-wifi (network-wifi-22): bound consecutive -ERESTARTSYS tolerance in the
+ * bh kthread before declaring a real fatal — see xradio_bh() below. */
+#define XRADIO_BH_EINTR_MAX 16
 
 #include "xradio.h"
 #include "bh.h"
@@ -1289,6 +1294,7 @@ static int xradio_bh(void *arg)
 	int tx_bursted = 0;
 	int rx_burst = 0;
 	long status;
+	int bh_eintr_cnt = 0;	/* tsp-wifi: consecutive -ERESTARTSYS count */
 	bool coming_rx = false;
 #if 0
 	u32 dummy;
@@ -1428,6 +1434,35 @@ static int xradio_bh(void *arg)
 		if (term) {
 			bh_printk(XRADIO_DBG_MSG, "xradio_bh exit!\n");
 			break;
+		}
+		/* tsp-wifi (network-wifi-22): tolerate a transient -ERESTARTSYS.
+		 * status<0 here can ONLY be -ERESTARTSYS from the interruptible
+		 * wait above (status is re-seeded positive at the top of every
+		 * iteration). On our CrealityTech 4.9 base, scan-under-load
+		 * transiently leaves a spurious TIF_SIGPENDING on this
+		 * freezer-naive SCHED_FIFO kthread, so the wait returns once with
+		 * -ERESTARTSYS; the stock TrimUI 4.9.191 base never delivers one,
+		 * so this fatal was effectively dead code there. The vendor logic
+		 * (identical in 2.16.83 AND 2.16.93) escalates ANY status<0 to a
+		 * full radio re-init -> unjoin -> the scan/roam wedge. Mirror what
+		 * the sibling xradio_proc thread already does (continue on ret<0):
+		 * flush the stray signal and re-wait, bounded, so a REAL fatal
+		 * (hw_priv->bh_error set elsewhere) still breaks immediately. */
+		if (status < 0 && !hw_priv->bh_error) {
+			if (signal_pending(current))
+				flush_signals(current);
+			if (++bh_eintr_cnt <= XRADIO_BH_EINTR_MAX) {
+				bh_printk(XRADIO_DBG_WARN,
+					  "bh wait interrupted (status=%ld), flush+retry %d/%d\n",
+					  status, bh_eintr_cnt, XRADIO_BH_EINTR_MAX);
+				continue;	/* status re-seeded positive at loop top */
+			}
+			bh_printk(XRADIO_DBG_ERROR,
+				  "bh wait interrupted %d times, treating fatal\n",
+				  bh_eintr_cnt);
+			/* fall through to the fatal handler below */
+		} else {
+			bh_eintr_cnt = 0;	/* any non-transient outcome resets */
 		}
 		/* 1--An fatal error occurs */
 		if (status < 0 || hw_priv->bh_error) {

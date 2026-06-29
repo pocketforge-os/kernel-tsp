@@ -506,12 +506,7 @@ void xradio_scan_work(struct work_struct *work)
 #endif
 
 		.scanFlags = 0, /* TODO:COMBO */
-		/* PocketForge (tsp-rcb): split-scan is NOT set globally here.
-		 * Under SUPPORT_HT40 the type+flags are packed into scanFlags
-		 * via SET_SCAN_*; WSM_SCAN_FLAG_SPLIT_METHOD is set further down
-		 * only for the associated (join_status==STA) background scan,
-		 * where minimizing data-path disturbance matters. The cold-boot
-		 * foreground scan is left non-split (no link to protect). */
+		/*.scanFlags = WSM_SCAN_FLAG_SPLIT_METHOD, */
 	};
 	bool first_run;
 	int i;
@@ -609,26 +604,15 @@ void xradio_scan_work(struct work_struct *work)
 		} else {
 #endif
 
-			/*
-			 * tsp-q75: announce power-save to the AP before the
-			 * off-channel scan excursion, and restore it after (see the
-			 * paired restore in the scan-complete block below). On this
-			 * single-radio chip the firmware expects to be in PS during
-			 * an off-channel period; the vendor #if 0'd this (mainline
-			 * cw1200, xradio's parent, does it), so a background scan
-			 * went off-channel while still advertising ACTIVE PM -- the
-			 * AP kept transmitting to us, we missed acks off-channel, and
-			 * the firmware was left wedged afterwards (every data TX ->
-			 * WSM_STATUS_RETRY_EXCEEDED, no self-recovery without a radio
-			 * reset). Setting PS makes the AP buffer for us and puts the
-			 * fw in the expected off-channel state.
-			 */
+#if 0
 			if (priv->join_status == XRADIO_JOIN_STATUS_STA &&
 			    !(priv->powersave_mode.pmMode & WSM_PSM_PS)) {
 				struct wsm_set_pm pm = priv->powersave_mode;
 				pm.pmMode = WSM_PSM_PS;
 				xradio_set_pm(priv, &pm);
-			} else if (priv->join_status == XRADIO_JOIN_STATUS_MONITOR) {
+			} else
+#endif
+			if (priv->join_status == XRADIO_JOIN_STATUS_MONITOR) {
 				/* FW bug: driver has to restart p2p-dev mode
 				 * after scan */
 				xradio_disable_listening(priv);
@@ -674,15 +658,11 @@ void xradio_scan_work(struct work_struct *work)
 		}
 #endif
 
-		/*
-		 * tsp-q75: restore PM (ACTIVE) after the off-channel scan --
-		 * pairs with the pre-scan PS announcement in the first_run block
-		 * above so the AP resumes sending to us and the radio returns to
-		 * the active home-channel state once scanning completes.
-		 */
+#if 0
 		if (priv->join_status == XRADIO_JOIN_STATUS_STA &&
 		    !(priv->powersave_mode.pmMode & WSM_PSM_PS))
 			xradio_set_pm(priv, &priv->powersave_mode);
+#endif
 
 		if (hw_priv->scan.status < 0)
 			scan_printk(XRADIO_DBG_ERROR, "Scan failed (%d).\n",
@@ -788,21 +768,11 @@ void xradio_scan_work(struct work_struct *work)
 
 			SET_SCAN_TYPE(&scan.scanFlags, WSM_SCAN_TYPE_BACKGROUND);
 			SET_SCAN_FLAG(&scan.scanFlags, WSM_SCAN_FLAG_FORCE_BACKGROUND);
-			/* PocketForge (tsp-rcb): when associated, scan one
-			 * channel at a time so the off-channel excursion does
-			 * not stall the data path. Without this the firmware
-			 * sweeps all channels in one go and starves an active
-			 * stream (root cause of the multi-second roam outage
-			 * measured in the house->woods walk). Enabled only for
-			 * the associated/background case so the cold-boot
-			 * foreground scan (no link to protect) is unchanged. */
-			SET_SCAN_FLAG(&scan.scanFlags, WSM_SCAN_FLAG_SPLIT_METHOD);
 
 #else
 
 			scan.scanType = WSM_SCAN_TYPE_BACKGROUND;
-			scan.scanFlags = WSM_SCAN_FLAG_FORCE_BACKGROUND |
-					 WSM_SCAN_FLAG_SPLIT_METHOD;
+			scan.scanFlags = WSM_SCAN_FLAG_FORCE_BACKGROUND;
 
 #endif
 		}
