@@ -11,7 +11,7 @@
 
 #include <net/mac80211.h>
 #include <linux/kthread.h>
-#include <linux/module.h>	/* [urq-dbg] module_param_named, S_IRUGO/S_IWUSR */
+#include <linux/module.h>	/* [urq] module_param_named for bh_selfheal */
 #include <linux/sched.h>	/* tsp-wifi: flush_signals/signal_pending (4.9) */
 
 /* tsp-wifi (network-wifi-22): bound consecutive -ERESTARTSYS tolerance in the
@@ -1262,15 +1262,12 @@ u32  tx_limit_cnt5;
 u32  tx_limit_cnt6;
 
 
-/* [urq-dbg] tsp-urq.1 / infra-023 M6 experimental knobs — REMOVE before final commit.
- * bh_inject : write 1 -> inject a fatal bh_error to exercise the recovery path.
- * bh_selfheal: 1 -> M6 fix (non-blocking direct hw_restart_work schedule, skip the
- *              blocking wsm_upper_restart lock-dance); 0 -> legacy behavior. */
-static int xradio_bh_inject;
-module_param_named(bh_inject, xradio_bh_inject, int, S_IRUGO | S_IWUSR);
-static int xradio_bh_selfheal = 1;	/* keep the self-heal fix ON by default (tsp-urq.1) */
+/* [urq] tsp-urq.1 / M6 self-heal toggle: 1 -> on a fatal bh_error, schedule the
+ * existing hw_restart_work DIRECTLY (non-blocking) instead of the blocking
+ * wsm_upper_restart lock-dance, which deadlocks if the BH died mid-scan (scan.lock
+ * held by a scan that can never complete). 0 -> legacy behavior. ON by default. */
+static int xradio_bh_selfheal = 1;
 module_param_named(bh_selfheal, xradio_bh_selfheal, int, S_IRUGO | S_IWUSR);
-int xradio_tx_stall_ms(void);	/* [urq] tsp-urq TX-progress watchdog threshold (defined in txrx.c) */
 
 static int xradio_bh(void *arg)
 {
@@ -1309,31 +1306,8 @@ static int xradio_bh(void *arg)
 			__func__, ret);
 
 	PERF_INFO_GETTIME(&last_showtime);
-	hw_priv->tx_last_confirm = jiffies;	/* [urq] seed the TX-progress watchdog heartbeat */
 	for (;;) {
 		PERF_INFO_GETTIME(&bh_start_time);
-		/* [urq-dbg] on-demand fatal bh_error injection (test recovery path). */
-		if (unlikely(xradio_bh_inject)) {
-			xradio_bh_inject = 0;
-			bh_printk(XRADIO_DBG_ERROR, "[urq-dbg] INJECT fatal bh_error\n");
-			hw_priv->bh_error = __LINE__;
-		}
-		/* [urq] TX-progress watchdog: frames are in-flight to the firmware
-		 * (hw_bufs_used>0) but NO TX confirm has arrived for tx_stall_ms - the
-		 * frozen-TX wedge that emits no confirm stream (the status=6 counter in
-		 * txrx.c is blind to it). Convert to a fatal bh_error so the recovery
-		 * path (hw_restart_work -> core_reinit, incl. self-heal) re-inits the
-		 * radio. Only fires when there is unconfirmed TX, so idle != wedge. */
-		{
-			int urq_sms = xradio_tx_stall_ms();
-			if (urq_sms > 0 && hw_priv->hw_bufs_used > 0 && !hw_priv->bh_error &&
-			    time_after(jiffies, hw_priv->tx_last_confirm + msecs_to_jiffies(urq_sms))) {
-				bh_printk(XRADIO_DBG_ERROR,
-					"[urq] TX stall: %d in-flight, no confirm for %dms -> bh_error for recovery\n",
-					hw_priv->hw_bufs_used, urq_sms);
-				hw_priv->bh_error = __LINE__;
-			}
-		}
 		/* Check if devices can sleep, and set time to wait for interrupt. */
 		if (!hw_priv->hw_bufs_used && !pending_tx &&
 		    hw_priv->powersave_enabled && !hw_priv->device_can_sleep &&
@@ -2096,12 +2070,6 @@ tx:
 	if (!term) {
 		bh_printk(XRADIO_DBG_ERROR, "Fatal error, exitting code=%d.\n",
 			  hw_priv->bh_error);
-		bh_printk(XRADIO_DBG_ERROR,
-			  "[urq-dbg] FATAL exit: bh_suspend=%d driver_ready=%d "
-			  "rpending=%d rrunning=%d selfheal=%d\n",
-			  atomic_read(&hw_priv->bh_suspend), hw_priv->driver_ready,
-			  work_pending(&hw_priv->hw_restart_work),
-			  hw_priv->hw_restart_work_running, xradio_bh_selfheal);
 
 #ifdef SUPPORT_FW_DBG_INF
 		xradio_fw_dbg_dump_in_direct_mode(hw_priv);
@@ -2138,12 +2106,10 @@ tx:
 		/* we should restart manually in etf mode.*/
 		if (!etf_is_connect() &&
 			XRADIO_BH_RESUMED == atomic_read(&hw_priv->bh_suspend)) {
-			bh_printk(XRADIO_DBG_ERROR, "[urq-dbg] legacy wsm_upper_restart\n");
 			wsm_upper_restart(hw_priv);
 		}
 #else
 		if (XRADIO_BH_RESUMED == atomic_read(&hw_priv->bh_suspend)) {
-			bh_printk(XRADIO_DBG_ERROR, "[urq-dbg] legacy wsm_upper_restart\n");
 			wsm_upper_restart(hw_priv);
 		}
 #endif

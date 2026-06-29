@@ -1934,23 +1934,15 @@ void xradio_get_ieee80211_tx_rate(struct xradio_common *hw_priv,
 
 #endif
 
-/* [urq] tsp-urq TX-health watchdog knobs.
- * tx_wedge_thresh: N consecutive RETRY_EXCEEDED TX-confirms (no success in between)
- *   that constitute a TX-death wedge -> trigger recovery. 0 disables. Tunable.
- * tx_inject_retry: [urq-dbg, test-only] force the next N confirms to count as
- *   RETRY_EXCEEDED so the watchdog can be exercised on the bench. REMOVE before
- *   the final commit (keep tx_wedge_thresh + the watchdog). */
+/* [urq] tsp-urq TX-health watchdog: tx_wedge_thresh = N consecutive
+ * RETRY_EXCEEDED (status=6) TX-confirms with no success in between that
+ * constitute a TX-death wedge -> convert to a fatal bh_error so the self-heal
+ * path re-inits the radio. 0 disables. Tunable. (The separate TX-progress
+ * "tx_stall_ms" timeout was REMOVED: tsp-urq proved it false-fired on the normal
+ * post-scan TX-resume gap and CAUSED the scan wedge it claimed to recover —
+ * stock has no such watchdog and rides scans out cleanly.) */
 static int tx_wedge_thresh = 40;
 module_param_named(tx_wedge_thresh, tx_wedge_thresh, int, S_IRUGO | S_IWUSR);
-static int tx_inject_retry;
-module_param_named(tx_inject_retry, tx_inject_retry, int, S_IRUGO | S_IWUSR);
-/* tx_stall_ms: TX-progress watchdog (catches the FROZEN-TX wedge that produces no
- * confirm stream at all - the counter above is blind to it). Checked in the BH loop:
- * frames in-flight to fw (hw_bufs_used>0) with NO confirm for this long == wedge. 0
- * disables. Tunable. */
-static int tx_stall_ms = 4000;
-module_param_named(tx_stall_ms, tx_stall_ms, int, S_IRUGO | S_IWUSR);
-int xradio_tx_stall_ms(void) { return tx_stall_ms; }	/* read from bh.c */
 
 void xradio_tx_confirm_cb(struct xradio_common *hw_priv,
 			  struct wsm_tx_confirm *arg)
@@ -1996,11 +1988,6 @@ void xradio_tx_confirm_cb(struct xradio_common *hw_priv,
 	 * at marginal signal does not trip it. */
 	{
 		int urq_st = arg->status;
-		hw_priv->tx_last_confirm = jiffies;	/* [urq] TX-progress watchdog heartbeat */
-		if (unlikely(tx_inject_retry > 0)) {	/* [urq-dbg] test knob */
-			tx_inject_retry--;
-			urq_st = WSM_STATUS_RETRY_EXCEEDED;
-		}
 		if (urq_st == WSM_STATUS_RETRY_EXCEEDED) {
 			if (tx_wedge_thresh > 0 &&
 			    ++hw_priv->tx_retry_streak >= tx_wedge_thresh &&
