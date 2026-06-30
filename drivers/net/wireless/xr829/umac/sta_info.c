@@ -1094,8 +1094,24 @@ int xrmac_sta_info_flush(struct ieee80211_local *local,
 	sta_info_finish_pending(local);
 
 	list_for_each_entry_safe(sta, tmp, &local->sta_list, list) {
-		if (!sdata || sdata == sta->sdata)
+		if (!sdata || sdata == sta->sdata) {
+			/*
+			 * PocketForge (network-wifi-22, v2): spare the FT
+			 * pre-installed PTK-bearing dummy so the new assoc
+			 * promotes it in place (key_map 0x3, no NOKEY). Only
+			 * ever true for the mac80211_mgd_assoc reassoc flush;
+			 * every other flush caller leaves ft_keep_dummy false
+			 * (genuine disconnect still frees the PTK). u.mgd is a
+			 * union member valid only for STATION vifs -- the
+			 * vif.type check MUST precede the flag read (short-
+			 * circuit && order is load-bearing; do not reorder).
+			 */
+			if (sta->dummy &&
+			    sta->sdata->vif.type == NL80211_IFTYPE_STATION &&
+			    sta->sdata->u.mgd.ft_keep_dummy)
+				continue;
 			WARN_ON(__sta_info_destroy(sta));
+		}
 	}
 	mutex_unlock(&local->sta_mtx);
 

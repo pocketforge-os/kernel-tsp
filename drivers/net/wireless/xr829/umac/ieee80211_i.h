@@ -494,6 +494,22 @@ struct ieee80211_if_managed {
 	 */
 	int roaming;
 #endif
+	/*
+	 * PocketForge (network-wifi-22, v2): 802.11r FT PTK-survival.
+	 * Compiled UNCONDITIONALLY (NOT under the dead CONFIG_XRMAC_XR_ROAMING_CHANGES,
+	 * and distinct from `roaming`, which if live would arm the key.c:471 call_rcu
+	 * key-destroy fast-path / UAF).
+	 *
+	 * ft_keep_dummy: TRUE only across the single FT reassoc set_disassoc() flush at
+	 *   mac80211_mgd_assoc, so the supplicant's pre-installed PTK-bearing dummy STA
+	 *   survives the flush and is promoted in place (PTK carries -> key_map 0x3, no NOKEY).
+	 * ft_dummy_valid: TRUE from that point until the dummy is either promoted
+	 *   (assoc_success) or reaped (any abort). Lets ieee80211_pre_assoc distinguish a
+	 *   LIVE spared FT dummy (reuse it) from a STALE leftover of an aborted/double roam
+	 *   (reap + re-alloc). Without it, the double-roam window promotes a stale/disabled PTK.
+	 */
+	bool ft_keep_dummy;
+	bool ft_dummy_valid;
 };
 
 struct ieee80211_if_ibss {

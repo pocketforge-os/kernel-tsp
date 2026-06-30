@@ -1802,8 +1802,17 @@ static bool ieee80211_assoc_success(struct ieee80211_work *wk,
 	if (err) {
 		printk(KERN_DEBUG "%s: failed to insert STA entry for"
 		       " the AP (error %d)\n", sdata->name, err);
+		/* promotion failed; reinsert freed the sta -> dummy is gone */
+		sdata->u.mgd.ft_dummy_valid = false;
 		return false;
 	}
+	/*
+	 * PocketForge (network-wifi-22, v2): the spared FT dummy is now a
+	 * real promoted sta. Clear the validity flag so a later pre_assoc
+	 * for this BSSID does not mistake the (now non-dummy) sta -- or a
+	 * future leftover -- for a reusable spared dummy.
+	 */
+	sdata->u.mgd.ft_dummy_valid = false;
 
 	/*
 	 * Always handle WMM once after association regardless
@@ -2306,6 +2315,7 @@ void mac80211_sta_rx_queued_mgmt(struct ieee80211_sub_if_data *sdata,
 			       le16_to_cpu(mgmt->u.deauth.reason_code));
 
 			xrmac_sta_info_destroy_addr(sdata, mgmt->bssid);
+			sdata->u.mgd.ft_dummy_valid = false;   /* network-wifi-22 v2 */
 			list_del_rcu(&wk->list);
 			xrmac_free_work(wk);
 			break;
@@ -2739,6 +2749,36 @@ static int ieee80211_pre_assoc(struct ieee80211_sub_if_data *sdata,
 	struct sta_info *sta;
 	int err;
 
+	/*
+	 * PocketForge (network-wifi-22, v2): FT reassoc reuse. If a dummy STA
+	 * for this BSSID survived the reassoc flush, decide by ft_dummy_valid:
+	 *  - valid  -> it is the supplicant's PTK-bearing FT dummy we just
+	 *              spared; reuse it as-is (re-allocating would collide with
+	 *              it as -EEXIST in xrmac_sta_info_insert_non_ibss and FAIL
+	 *              the assoc). Its PTK carries through promotion -> key_map 0x3.
+	 *  - stale  -> leftover from an aborted/double roam with a disabled key;
+	 *              reap it and fall through to a fresh alloc so the normal
+	 *              supplicant add_key flow re-installs the correct PTK.
+	 * MUST use the dummy-AWARE accessor: xrmac_sta_info_get()/get_bss() both
+	 * filter dummies (!sta->dummy) and would never see the spared dummy.
+	 * Lookup is read-only under rcu_read_lock; the reap (destroy_addr takes
+	 * sta_mtx) is done OUTSIDE the rcu section. pre_assoc runs after mgd_assoc
+	 * has dropped ifmgd->mtx, so no mtx is held here.
+	 */
+	rcu_read_lock();
+	sta = xrmac_sta_info_get_bss_rx(sdata, bssid);
+	if (sta && sta->dummy) {
+		bool valid = sdata->u.mgd.ft_dummy_valid;
+
+		rcu_read_unlock();
+		if (valid)
+			return 0; /* reuse the spared FT PTK-bearing dummy */
+		/* stale dummy from an aborted/double roam -> reap + re-alloc */
+		xrmac_sta_info_destroy_addr(sdata, bssid);
+	} else {
+		rcu_read_unlock();
+	}
+
 	sta = xrmac_sta_info_alloc(sdata, bssid, GFP_KERNEL);
 	if (!sta)
 		return -ENOMEM;
@@ -2769,6 +2809,7 @@ static enum work_done_result ieee80211_assoc_done(struct ieee80211_work *wk,
 
 	if (!skb) {
 		xrmac_sta_info_destroy_addr(wk->sdata, cbss->bssid);
+		wk->sdata->u.mgd.ft_dummy_valid = false;   /* network-wifi-22 v2 */
 		cfg80211_assoc_timeout(wk->sdata->dev, cbss);
 		goto destroy;
 	}
@@ -2799,6 +2840,7 @@ static enum work_done_result ieee80211_assoc_done(struct ieee80211_work *wk,
 			mutex_unlock(&wk->sdata->u.mgd.mtx);
 			/* oops -- internal error -- send timeout for now */
 			xrmac_sta_info_destroy_addr(wk->sdata, cbss->bssid);
+			wk->sdata->u.mgd.ft_dummy_valid = false;   /* network-wifi-22 v2 */
 			cfg80211_assoc_timeout(wk->sdata->dev, cbss);
 			printk(KERN_ERR "%s return WORK_DONE_DESTROY\n", __func__);
 			return WORK_DONE_DESTROY;
@@ -2808,6 +2850,7 @@ static enum work_done_result ieee80211_assoc_done(struct ieee80211_work *wk,
 	} else {
 		/* assoc failed - destroy the dummy station entry */
 		xrmac_sta_info_destroy_addr(wk->sdata, cbss->bssid);
+		wk->sdata->u.mgd.ft_dummy_valid = false;   /* network-wifi-22 v2 */
 	}
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0))
@@ -2850,8 +2893,22 @@ int mac80211_mgd_assoc(struct ieee80211_sub_if_data *sdata,
 #ifdef CONFIG_XRMAC_XR_ROAMING_CHANGES
 		ifmgd->roaming = 1;
 #endif
+		/*
+		 * PocketForge (network-wifi-22, v2): FT reassoc. Spare the
+		 * supplicant's pre-installed PTK-bearing dummy STA across the
+		 * disassoc flush so the upcoming assoc promotes it IN PLACE
+		 * (PTK survives -> key_map 0x3) instead of destroying it
+		 * (which frees sta->ptk -> driver DISABLE of the new PTK on
+		 * slot 0 -> GTK-only key_map 0x2 -> unicast NOKEY storm).
+		 * ft_keep_dummy brackets ONLY this set_disassoc, synchronously,
+		 * under ifmgd->mtx -- compiled macro-free so it cannot stick.
+		 * ft_dummy_valid stays TRUE until promotion or abort-reap.
+		 */
+		ifmgd->ft_keep_dummy = true;
+		ifmgd->ft_dummy_valid = true;
 		/* Trying to reassociate - clear previous association state */
 		ieee80211_set_disassoc(sdata, true, false);
+		ifmgd->ft_keep_dummy = false;
 #ifdef CONFIG_XRMAC_XR_ROAMING_CHANGES
 		ifmgd->roaming = 0;
 #endif
@@ -3020,6 +3077,7 @@ int mac80211_mgd_deauth(struct ieee80211_sub_if_data *sdata,
 		if (wk && wk->type == IEEE80211_WORK_ASSOC) {
 			/* clean up dummy sta & TX sync */
 			xrmac_sta_info_destroy_addr(wk->sdata, wk->filter_ta);
+			wk->sdata->u.mgd.ft_dummy_valid = false;   /* network-wifi-22 v2 */
 			if (wk->assoc.synced)
 				drv_finish_tx_sync(local, wk->sdata,
 						   wk->filter_ta,
