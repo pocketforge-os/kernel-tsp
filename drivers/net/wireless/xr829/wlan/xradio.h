@@ -60,8 +60,11 @@
 #define WSM_KEY_MAX_IDX         20
 
 #ifdef BH_PROC_THREAD
-/*process tx in proc thread*/
-#define BH_PROC_TX       0
+/*process tx in proc thread (PocketForge 0->1, tsp-urq/network-wifi-22: CrealityTech
+ * 2.16.83 shipped 0 -> inline wsm_get_tx feeds firmware 1-2 frames/cycle -> shallow
+ * ~2.5-MPDU A-MPDUs -> ~33% slower uplink than stock. Stock xradio 2.16.93 ships 1 ->
+ * proc-thread xradio_bh_get pushes the whole backlog -> ~11-MPDU aggregates. Matches stock.)*/
+#define BH_PROC_TX       1
 /*process rx in proc thread*/
 #define BH_PROC_RX       1
 /*Dynamic priority adjust*/
@@ -442,6 +445,13 @@ struct xradio_common {
 	int       if_id_selected;
 	u32				key_map;
 	struct wsm_add_key		keys[WSM_KEY_MAX_INDEX + 1];
+	/*
+	 * tsp-2w6: per-fw-slot owning mac80211 key_conf. The PTK is pinned to
+	 * slot 0 across a roam; this lets the stale old-PTK DISABLE (which still
+	 * carries hw_key_idx==0) detect that slot 0 was reassigned to the new
+	 * PTK and skip the free instead of clobbering the live key. NULL == free.
+	 */
+	struct ieee80211_key_conf	*key_conf[WSM_KEY_MAX_INDEX + 1];
 #ifdef MCAST_FWDING
 	struct wsm_buf		wsm_release_buf;
 	u8			buf_released;

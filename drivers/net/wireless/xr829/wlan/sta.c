@@ -1039,6 +1039,24 @@ int xradio_set_key(struct ieee80211_hw *dev, enum set_key_cmd cmd,
 			goto finally;
 		}
 
+		/*
+		 * tsp-2w6: the PTK is pinned to fw slot 0 (xradio_alloc_key). On a
+		 * roam slot 0 may still hold the STALE old-AP PTK (mac80211 adds
+		 * the new key before disabling the old). We are about to overwrite
+		 * slot 0 with the new PTK, so tear the stale key out of firmware
+		 * now and drop our owner record; the stale key's later DISABLE
+		 * still carries hw_key_idx==0 but the DISABLE owner-check sees
+		 * slot 0 is now owned by THIS key and skips the stale free.
+		 */
+		if (pairwise && hw_priv->key_conf[0] && hw_priv->key_conf[0] != key) {
+			struct wsm_remove_key stale = { .entryIndex = 0 };
+
+			wsm_remove_key(hw_priv, &stale, priv->if_id);
+			memset(&hw_priv->keys[0], 0, sizeof(hw_priv->keys[0]));
+			hw_priv->keys[0].entryIndex = 0;
+			hw_priv->key_conf[0] = NULL;
+		}
+
 		SYS_BUG(pairwise && !sta);
 		if (sta)
 			peer_addr = sta->addr;
@@ -1151,10 +1169,12 @@ int xradio_set_key(struct ieee80211_hw *dev, enum set_key_cmd cmd,
 			goto finally;
 		}
 		ret = SYS_WARN(wsm_add_key(hw_priv, wsm_key, priv->if_id));
-		if (!ret)
+		if (!ret) {
 			key->hw_key_idx = idx;
-		else
+			hw_priv->key_conf[idx] = key;	/* tsp-2w6: record slot owner */
+		} else {
 			xradio_free_key(hw_priv, idx);
+		}
 
 		if (!ret && (pairwise || wsm_key->type == WSM_KEY_TYPE_WEP_DEFAULT)
 		    && (priv->filter4.enable & 0x2))
@@ -1172,6 +1192,22 @@ int xradio_set_key(struct ieee80211_hw *dev, enum set_key_cmd cmd,
 
 		if (wsm_key.entryIndex > WSM_KEY_MAX_IDX) {
 			ret = -EINVAL;
+			goto finally;
+		}
+
+		/*
+		 * tsp-2w6: a stale roamed-away PTK still says hw_key_idx==0, but
+		 * slot 0 now belongs to the NEW PTK (pinned + evicted at SET). If
+		 * the slot's recorded owner is no longer THIS key, the slot was
+		 * reassigned: skip the free/remove instead of clobbering the live
+		 * owner. (Also guards an already-freed slot.) key_conf[] is sized
+		 * to keys[] so bound the access by WSM_KEY_MAX_INDEX.
+		 */
+		if (wsm_key.entryIndex <= WSM_KEY_MAX_INDEX &&
+		    (!(hw_priv->key_map & BIT(wsm_key.entryIndex)) ||
+		     (hw_priv->key_conf[wsm_key.entryIndex] &&
+		      hw_priv->key_conf[wsm_key.entryIndex] != key))) {
+			ret = 0;
 			goto finally;
 		}
 

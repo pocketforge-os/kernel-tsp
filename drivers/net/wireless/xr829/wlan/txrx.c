@@ -3247,24 +3247,28 @@ int xradio_alloc_key(struct xradio_common *hw_priv, bool pairwise)
 	txrx_printk(XRADIO_DBG_TRC, "%s\n", __func__);
 
 	/*
-	 * tsp-q75: reserve firmware key slot 0 for the PAIRWISE (PTK) key.
-	 * The driver allocates fw key slots dynamically (ffs(~key_map)). On a
-	 * roam the stale old-AP PTK can still occupy slot 0 when mac80211
-	 * installs the NEW PTK (mac80211 adds the new key before disabling the
-	 * old one), so the new PTK is pushed to slot 1; the stale key's later
-	 * DISABLE then frees slot 0 and the new GTK reuses it -> PTK/GTK fw
-	 * slots INVERTED vs the canonical PTK0/GTK1 layout -> firmware
-	 * WSM_STATUS_NO_KEY_FOUND on every RX = the intermittent roam wedge
-	 * (captured under tsp-q75 build #10/#11). Keeping group keys out of
-	 * slot 0 makes the inversion impossible: a group key can never land in
-	 * the pairwise key's canonical slot, regardless of mac80211's
-	 * add-new-before-remove-old ordering. We must NOT free the stale key's
-	 * slot here instead: mac80211 frees by the hw_key_idx it stored at
-	 * SET_KEY, so freeing early would let a reused slot be clobbered by the
-	 * stale key's later DISABLE.
+	 * tsp-2w6: the firmware REQUIRES the unicast/pairwise (PTK) key in fw
+	 * key slot 0, else it returns WSM_STATUS_NO_KEY_FOUND on every unicast
+	 * RX. The driver allocates fw slots dynamically (ffs(~key_map)). On a
+	 * roam mac80211 installs the NEW PTK BEFORE disabling the OLD one, so
+	 * slot 0 still holds the stale old-AP PTK (key_map=0x1) and a plain
+	 * ffs() puts the new PTK in slot 1 -> PTK in a non-canonical slot ->
+	 * persistent No-key storm = 100% unicast loss (captured on a forced FT
+	 * roam storm; tsp-q75's group-only slot-0 exclusion did NOT prevent it
+	 * because it never forced the PAIRWISE key INTO slot 0).
+	 * Fix: PAIRWISE keys ALWAYS pin slot 0. If slot 0 still holds a stale
+	 * PTK the SET_KEY caller (which has the new key_conf) evicts it before
+	 * filling slot 0; the stale key's later DISABLE still carries
+	 * hw_key_idx==0 but is made a safe no-op by the per-slot key_conf[]
+	 * owner check in xradio_set_key's DISABLE branch (no clobber). GROUP
+	 * keys are kept OUT of slot 0 so a group key can never take the PTK slot.
 	 */
-	if (!pairwise)
-		map |= BIT(0);
+	if (pairwise) {
+		hw_priv->key_map |= BIT(0);
+		hw_priv->keys[0].entryIndex = 0;
+		return 0;
+	}
+	map |= BIT(0);
 
 	idx = ffs(~map) - 1;
 	if (idx < 0 || idx > WSM_KEY_MAX_INDEX)
@@ -3283,6 +3287,7 @@ void xradio_free_key(struct xradio_common *hw_priv, int idx)
 	SYS_BUG(!(hw_priv->key_map & BIT(idx)));
 	memset(&hw_priv->keys[idx], 0, sizeof(hw_priv->keys[idx]));
 	hw_priv->key_map &= ~BIT(idx);
+	hw_priv->key_conf[idx] = NULL;
 	txrx_printk(XRADIO_DBG_NIY, "%s, idx=%d\n", __func__, idx);
 }
 
@@ -3292,6 +3297,7 @@ void xradio_free_keys(struct xradio_common *hw_priv)
 
 	memset(&hw_priv->keys, 0, sizeof(hw_priv->keys));
 	hw_priv->key_map = 0;
+	memset(&hw_priv->key_conf, 0, sizeof(hw_priv->key_conf));
 }
 
 int xradio_upload_keys(struct xradio_vif *priv)
