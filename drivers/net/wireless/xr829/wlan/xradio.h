@@ -353,6 +353,7 @@ struct xradio_common {
 	int				wsm_rx_seq;	/* byte */
 	int				wsm_tx_seq;	/* byte */
 	int				hw_bufs_used;
+	unsigned long			last_tx_confirm_jiffies; /* [wedgedbg] tsp-urq.1/.4 STEP-0: last hw_bufs_used decrement (TX-confirm) time */
 	int				hw_bufs_used_vif[XRWL_MAX_VIFS];
 	struct sk_buff			*skb_cache;
 	struct sk_buff			*skb_reserved;

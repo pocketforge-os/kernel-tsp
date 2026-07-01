@@ -911,6 +911,7 @@ int wsm_release_tx_buffer(struct xradio_common *hw_priv, int count)
 {
 	int ret = 0;
 	int hw_bufs_used = hw_priv->hw_bufs_used;
+	hw_priv->last_tx_confirm_jiffies = jiffies; /* [wedgedbg] tsp-urq.1/.4 STEP-0 */
 	bh_printk(XRADIO_DBG_MSG, "%s\n", __func__);
 
 	hw_priv->hw_bufs_used -= count;
@@ -1403,6 +1404,28 @@ static int xradio_bh(void *arg)
 			 status);
 #endif
 		PERF_INFO_STAMP(&sdio_reg_time, &bh_wait, 0);
+
+		/* [wedgedbg] tsp-urq.1/.4 STEP-0: low-rate TX-liveness snapshot to classify
+		 * the silent idle TX-wedge (Mode-1 stuck hw_bufs_used vs Mode-2 stuck umac
+		 * queue-stop). status>0 = woke on rx/tx; ==0 = full timeout. READ-ONLY. */
+		{
+			static unsigned long wd_last, wd_rxwake, wd_tmo;
+			if (status > 0)
+				wd_rxwake++;
+			else if (status == 0)
+				wd_tmo++;
+			if (time_after(jiffies, wd_last + 20*HZ)) {
+				bh_printk(XRADIO_DBG_NIY,
+				  "[WEDGEDBG] hw_bufs_used=%d tx_lock=%d confirm_age_ms=%u rxwake=%lu tmo=%lu pending_tx=%d\n",
+				  hw_priv->hw_bufs_used, atomic_read(&hw_priv->tx_lock),
+				  jiffies_to_msecs(jiffies - hw_priv->last_tx_confirm_jiffies),
+				  wd_rxwake, wd_tmo, pending_tx);
+				mac80211_wedgedbg_dump(hw_priv->hw);
+				wd_last = jiffies;
+				wd_rxwake = 0;
+				wd_tmo = 0;
+			}
+		}
 
 		/* 0--bh is going to be shut down */
 		if (term) {

@@ -3201,6 +3201,9 @@ void mac80211_wake_queue(struct ieee80211_hw *hw, int queue);
  */
 void mac80211_stop_queue(struct ieee80211_hw *hw, int queue);
 
+/* [wedgedbg] tsp-urq.1/.4 STEP-0: dump stuck umac queue-stop reasons (Mode-2) */
+void mac80211_wedgedbg_dump(struct ieee80211_hw *hw);
+
 /**
  * mac80211_queue_stopped - test status of the queue
  * @hw: pointer as obtained from mac80211_alloc_hw().

@@ -1039,6 +1039,17 @@ int xradio_set_key(struct ieee80211_hw *dev, enum set_key_cmd cmd,
 			goto finally;
 		}
 
+		if (sta)
+			sta_printk(XRADIO_DBG_WARN,
+				"[KEYDBG] SET pairwise=%d idx=%d key_map=0x%x conf0=%d cipher=0x%x peer=%pM\n",
+				pairwise, idx, hw_priv->key_map,
+				hw_priv->key_conf[0] ? 1 : 0, key->cipher, sta->addr);
+		else
+			sta_printk(XRADIO_DBG_WARN,
+				"[KEYDBG] SET pairwise=%d idx=%d key_map=0x%x conf0=%d cipher=0x%x GROUP keyidx=%d\n",
+				pairwise, idx, hw_priv->key_map,
+				hw_priv->key_conf[0] ? 1 : 0, key->cipher, key->keyidx);
+
 		/*
 		 * tsp-2w6: the PTK is pinned to fw slot 0 (xradio_alloc_key). On a
 		 * roam slot 0 may still hold the STALE old-AP PTK (mac80211 adds
@@ -1051,6 +1062,9 @@ int xradio_set_key(struct ieee80211_hw *dev, enum set_key_cmd cmd,
 		if (pairwise && hw_priv->key_conf[0] && hw_priv->key_conf[0] != key) {
 			struct wsm_remove_key stale = { .entryIndex = 0 };
 
+			sta_printk(XRADIO_DBG_WARN,
+				"[KEYDBG] evict stale slot0 PTK (key_map=0x%x) before new PTK install\n",
+				hw_priv->key_map);
 			wsm_remove_key(hw_priv, &stale, priv->if_id);
 			memset(&hw_priv->keys[0], 0, sizeof(hw_priv->keys[0]));
 			hw_priv->keys[0].entryIndex = 0;
@@ -1175,6 +1189,9 @@ int xradio_set_key(struct ieee80211_hw *dev, enum set_key_cmd cmd,
 		} else {
 			xradio_free_key(hw_priv, idx);
 		}
+		sta_printk(XRADIO_DBG_WARN,
+			"[KEYDBG] SETdone idx=%d ret=%d type=%d key_map=0x%x\n",
+			idx, ret, wsm_key->type, hw_priv->key_map);
 
 		if (!ret && (pairwise || wsm_key->type == WSM_KEY_TYPE_WEP_DEFAULT)
 		    && (priv->filter4.enable & 0x2))
@@ -1195,6 +1212,12 @@ int xradio_set_key(struct ieee80211_hw *dev, enum set_key_cmd cmd,
 			goto finally;
 		}
 
+		sta_printk(XRADIO_DBG_WARN,
+			"[KEYDBG] DIS hw_key_idx=%d key_map=0x%x ownermatch=%d\n",
+			wsm_key.entryIndex, hw_priv->key_map,
+			(wsm_key.entryIndex <= WSM_KEY_MAX_INDEX &&
+			 hw_priv->key_conf[wsm_key.entryIndex] == key) ? 1 : 0);
+
 		/*
 		 * tsp-2w6: a stale roamed-away PTK still says hw_key_idx==0, but
 		 * slot 0 now belongs to the NEW PTK (pinned + evicted at SET). If
@@ -1207,10 +1230,15 @@ int xradio_set_key(struct ieee80211_hw *dev, enum set_key_cmd cmd,
 		    (!(hw_priv->key_map & BIT(wsm_key.entryIndex)) ||
 		     (hw_priv->key_conf[wsm_key.entryIndex] &&
 		      hw_priv->key_conf[wsm_key.entryIndex] != key))) {
+			sta_printk(XRADIO_DBG_WARN,
+				"[KEYDBG] DIS skip (slot %d not owned by this key)\n",
+				wsm_key.entryIndex);
 			ret = 0;
 			goto finally;
 		}
 
+		sta_printk(XRADIO_DBG_WARN, "[KEYDBG] DIS free slot %d\n",
+			wsm_key.entryIndex);
 		xradio_free_key(hw_priv, wsm_key.entryIndex);
 		ret = wsm_remove_key(hw_priv, &wsm_key, priv->if_id);
 	} else {
@@ -2325,6 +2353,9 @@ void xradio_join_work(struct work_struct *work)
 
 		memcpy(&join.bssid[0], bssid, sizeof(join.bssid));
 		memcpy(&priv->join_bssid[0], bssid, sizeof(priv->join_bssid));
+		sta_printk(XRADIO_DBG_WARN,
+			"[KEYDBG] join bssid=%pM key_map=0x%x\n",
+			priv->join_bssid, hw_priv->key_map);
 
 		if (ssidie) {
 			join.ssidLength = ssidie[1];
@@ -2359,12 +2390,15 @@ void xradio_join_work(struct work_struct *work)
 
 		wsm_flush_tx(hw_priv);
 
-		/* Queue unjoin if not associated in 3 sec. */
+		/* Queue unjoin if not associated in 2 sec (network-wifi-22 tsp-urq.6:
+		 * gated 3*HZ->2*HZ to shave ~1s off a failed-join roam tail; STEP-0
+		 * bench-verified successful reassocs complete <1.5s so >=0.5s margin
+		 * before this fires on a would-have-succeeded join. NOT 1*HZ (M1). */
 		queue_delayed_work(hw_priv->workqueue,
-			&priv->join_timeout, 3 * HZ);
+			&priv->join_timeout, 2 * HZ);
 		/*Stay Awake for Join Timeout*/
 #ifdef CONFIG_PM
-		xradio_pm_stay_awake(&hw_priv->pm_state, 3 * HZ);
+		xradio_pm_stay_awake(&hw_priv->pm_state, 2 * HZ);
 #endif
 		xradio_disable_listening(priv);
 
@@ -2500,6 +2534,9 @@ void xradio_unjoin_work(struct work_struct *work)
 		wsm_flush_tx(hw_priv);
 		SYS_WARN(wsm_keep_alive_period(hw_priv, 0, priv->if_id));
 		SYS_WARN(wsm_reset(hw_priv, &reset, priv->if_id));
+		sta_printk(XRADIO_DBG_WARN,
+			"[KEYDBG] unjoin wsm_reset DONE (fw key table flushed) mirror key_map=0x%x kept\n",
+			hw_priv->key_map);
 		SYS_WARN(wsm_set_operational_mode(hw_priv, &mode, priv->if_id));
 		SYS_WARN(wsm_set_output_power(hw_priv,
 			hw_priv->output_power * 10, priv->if_id));

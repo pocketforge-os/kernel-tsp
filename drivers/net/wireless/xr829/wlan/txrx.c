@@ -1644,9 +1644,31 @@ void xradio_tx(struct ieee80211_hw *dev, struct sk_buff *skb)
 	 * dhcp and 8021 frames are important, use b/g rate and delay scan.
 	 * it can make sense, such as accelerate connect.
 	 */
-	if (ieee80211_is_auth(frame->frame_control)) {
+	if (ieee80211_is_auth(frame->frame_control) ||
+	    ieee80211_is_assoc_req(frame->frame_control) ||
+	    ieee80211_is_reassoc_req(frame->frame_control)) {
 		hw_priv->scan_delay_time[priv->if_id] = jiffies;
 		hw_priv->scan_delay_status[priv->if_id] = XRADIO_SCAN_DELAY;
+		/*
+		 * tsp-urq (network-wifi-22): (FT-)auth and (re)assoc-req are
+		 * roam-critical mgmt frames that are frequently TX'd at marginal
+		 * signal during a roam; if they are lost the roam fails/times out
+		 * and the device can be left stuck-unreachable on a marginal AP.
+		 * Force them to a robust basic rate using the SAME mechanism the
+		 * driver already applies to DHCP/EAPOL below, so they survive the
+		 * weak link -> fewer failed FT-auth -> fewer stuck roams. M1-safe
+		 * (no key/reset side effects; only the TX rate policy for this
+		 * frame is changed).
+		 */
+		t.txpriv.use_bg_rate =
+		hw_priv->hw->wiphy-> \
+		   bands[hw_priv->channel->band]->bitrates[0].hw_value;
+		if (priv->vif->p2p)
+			t.txpriv.use_bg_rate = AG_RATE_INDEX;
+		t.txpriv.use_bg_rate |= 0x80;
+		txrx_printk(XRADIO_DBG_WARN,
+			"[KEYDBG] robust mgmt rate fc=0x%04x bg_rate=0x%02x\n",
+			frame->frame_control, t.txpriv.use_bg_rate);
 	} else if (ieee80211_is_data_present(frame->frame_control)) {
 		u8 *llc = skb->data+ieee80211_hdrlen(frame->frame_control);
 		if (is_dhcp(llc) || is_8021x(llc)) {
@@ -2804,12 +2826,17 @@ void xradio_rx_cb(struct xradio_vif *priv,
 #endif
 				txrx_printk(XRADIO_DBG_WARN, "[RX] IF=%d, No key found.\n",
 				    priv->if_id);
+				txrx_printk(XRADIO_DBG_WARN,
+				    "[KEYDBG] NOKEY key_map=0x%x conf0=%d sa=%pM mcast=%d\n",
+				    hw_priv->key_map, hw_priv->key_conf[0] ? 1 : 0,
+				    frame->addr2,
+				    is_multicast_ether_addr(frame->addr1));
 				goto drop;
 #ifdef MONITOR_MODE
 			}
 #endif
 		} else {
-			txrx_printk(XRADIO_DBG_WARN, "[RX] IF=%d, Receive failure: %d.\n",
+			txrx_printk(XRADIO_DBG_NIY, "[RX] IF=%d, Receive failure: %d.\n",
 				priv->if_id, arg->status);
 			goto drop;
 		}
@@ -3339,6 +3366,15 @@ int xradio_upload_keys(struct xradio_vif *priv)
 			default:
 				break;
 			}
+			if (peer)
+				txrx_printk(XRADIO_DBG_WARN,
+					"[KEYDBG] upload idx=%d type=%d peer=%pM join=%pM push=%d\n",
+					idx, k->type, peer, priv->join_bssid,
+					!memcmp(peer, priv->join_bssid, ETH_ALEN));
+			else
+				txrx_printk(XRADIO_DBG_WARN,
+					"[KEYDBG] upload idx=%d type=%d GROUP(skip) join=%pM\n",
+					idx, k->type, priv->join_bssid);
 			if (!peer || memcmp(peer, priv->join_bssid, ETH_ALEN))
 				continue;
 			ret = wsm_add_key(hw_priv, k, priv->if_id);

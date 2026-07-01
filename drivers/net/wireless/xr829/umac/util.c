@@ -400,6 +400,27 @@ void mac80211_stop_queue(struct ieee80211_hw *hw, int queue)
 }
 EXPORT_SYMBOL(mac80211_stop_queue);
 
+/* [wedgedbg] tsp-urq.1/.4 STEP-0: expose per-queue stop-reason bitmask + pending
+ * depth to the xradio driver's BH liveness snapshot, so a stuck umac queue-stop
+ * (Mode-2: hw_bufs_used==0 yet TX frozen) is visible alongside hw_bufs_used
+ * (Mode-1). Lockless diagnostic read; READ-ONLY; prints only stopped queues. */
+void mac80211_wedgedbg_dump(struct ieee80211_hw *hw)
+{
+	struct ieee80211_local *local = hw_to_local(hw);
+	int q, n = hw->queues;
+
+	if (n > IEEE80211_MAX_QUEUES)
+		n = IEEE80211_MAX_QUEUES;
+	for (q = 0; q < n; q++) {
+		if (local->queue_stop_reasons[q])
+			printk(KERN_DEBUG
+			       "[WEDGEDBG-QSR] q%d stop_reasons=0x%lx pending=%d\n",
+			       q, local->queue_stop_reasons[q],
+			       !skb_queue_empty(&local->pending[q]));
+	}
+}
+EXPORT_SYMBOL(mac80211_wedgedbg_dump);
+
 void mac80211_add_pending_skb(struct ieee80211_local *local,
 			       struct sk_buff *skb)
 {
