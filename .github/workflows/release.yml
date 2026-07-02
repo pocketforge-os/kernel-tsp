@@ -3,7 +3,8 @@
 # Trigger: tag push matching tsp-*.
 # Runner: self-hosted Dell runner (org-level, label: build-lab).
 #   - Reaches kubo at 127.0.0.1:5001 for IPFS publish.
-#   - Has the PocketForge release key (minisign) via Actions secret.
+#   - Assumes pf-ci-sign via OIDC to read the minisign key + passphrase
+#     from AWS Secrets Manager. NO static key on the runner. tsp-zbg / infra-060.
 #
 # Steps:
 #   1. Reproducible build (SOURCE_DATE_EPOCH + KBUILD vars).
@@ -23,7 +24,8 @@ on:
       - 'tsp-*'
 
 permissions:
-  contents: write
+  contents: write # publish GitHub Releases
+  id-token: write # mint GitHub OIDC token for AWS pf-ci-sign role assumption
 
 # Only one release build at a time on the Dell runner.
 # Do NOT cancel-in-progress — a release build that started should finish.
@@ -36,6 +38,12 @@ jobs:
     name: Build, sign, publish
     runs-on: [self-hosted, build-lab]
     timeout-minutes: 30
+
+    # Signing is gated by the `sign` GitHub Environment (main-only deployment
+    # policy). This is the ONLY path in the world that can assume pf-ci-sign —
+    # the role's OIDC trust is pinned to
+    # `repo:pocketforge-os/kernel-tsp:environment:sign`. See tsp-zbg / infra-060.
+    environment: sign
 
     steps:
       - name: Checkout
@@ -121,34 +129,70 @@ jobs:
           cat SHA256SUMS
           ls -lh .
 
-      - name: Sign artifacts
-        env:
-          RELEASE_SECRET_KEY_FILE: ${{ secrets.RELEASE_SECRET_KEY_FILE }}
+      # Sign step: read the passphrase-encrypted minisign key + its passphrase from
+      # AWS Secrets Manager via the OIDC-federated pf-ci-sign role. No static key
+      # on this runner; no key in an Actions secret; key material lives on this
+      # box for ~seconds during the sign, then disappears.
+      # See tsp-zbg / .planning/infra/infra-060-secrets-management.md.
+
+      - name: Ensure expect(1) is installed (used to feed minisign the passphrase)
         run: |
-          set -eux
+          command -v expect >/dev/null 2>&1 || sudo apt-get install -qq -y expect
+
+      - name: Assume pf-ci-sign via OIDC (no static key)
+        uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6.2.1
+        with:
+          role-to-assume: arn:aws:iam::611492472006:role/pf-ci-sign
+          aws-region: us-east-1
+
+      - name: Sign artifacts
+        run: |
+          set -e -o pipefail
           STAGING="${{ steps.package.outputs.staging }}"
+          TAG="${{ steps.package.outputs.tag }}"
 
-          if [ -z "${RELEASE_SECRET_KEY_FILE:-}" ]; then
-            echo "::error::RELEASE_SECRET_KEY_FILE secret is not set. Cannot sign."
-            exit 1
-          fi
+          # Fetch both trust secrets. Only pf-ci-sign can do this — its OIDC
+          # trust is pinned to `repo:pocketforge-os/kernel-tsp:environment:sign`.
+          KEY_FILE="$(mktemp)"
+          trap 'shred -u "$KEY_FILE" 2>/dev/null || rm -f "$KEY_FILE"' EXIT
 
-          # Write the secret key to a temp file (minisign reads from file)
-          KEY_FILE=$(mktemp)
-          trap 'rm -f "$KEY_FILE"' EXIT
-          echo "$RELEASE_SECRET_KEY_FILE" > "$KEY_FILE"
+          aws secretsmanager get-secret-value \
+            --secret-id /pocketforge/trust/minisign-privkey \
+            --query SecretString --output text > "$KEY_FILE"
 
-          # Sign each artifact + the manifest
+          export MINISIGN_PASS="$(aws secretsmanager get-secret-value \
+            --secret-id /pocketforge/trust/minisign-passphrase \
+            --query SecretString --output text)"
+
+          # Sign each artifact + the manifest via the helper script (keeps the
+          # expect(1) heredoc out of this YAML file).
+          chmod +x .github/scripts/sign-artifact.sh
           for f in "$STAGING/Image" \
                    "$STAGING/pocketforge_tsp.dtb" \
-                   "$STAGING/modules-${{ steps.package.outputs.tag }}.tar.xz" \
+                   "$STAGING/modules-${TAG}.tar.xz" \
                    "$STAGING/SHA256SUMS"; do
-            minisign -S -s "$KEY_FILE" -m "$f" \
-              -t "PocketForge kernel-tsp ${{ steps.package.outputs.tag }}"
+            KEY_FILE="$KEY_FILE" ARTIFACT="$f" TAG="$TAG" \
+              .github/scripts/sign-artifact.sh
           done
+
+          unset MINISIGN_PASS
 
           echo "Signed artifacts:"
           ls -la "$STAGING"/*.minisig
+
+      - name: Verify signatures against the published trust anchor (round-trip proof)
+        run: |
+          # Fetch the canonical pub from infra/trust/minisign.pub via raw URL —
+          # avoids checkout of a second repo. This step FAILS the release if the
+          # signatures don't verify against what we tell the world is our pub key.
+          STAGING="${{ steps.package.outputs.staging }}"
+          curl -fsSL -o "$STAGING/pocketforge.pub" \
+            https://raw.githubusercontent.com/pocketforge-os/infra/main/trust/minisign.pub
+
+          for f in Image pocketforge_tsp.dtb modules-${{ steps.package.outputs.tag }}.tar.xz SHA256SUMS; do
+            minisign -Vm "$STAGING/$f" -p "$STAGING/pocketforge.pub"
+          done
+          echo "All signatures verified against the committed public key."
 
       - name: Create GitHub Release
         env:
@@ -171,9 +215,16 @@ jobs:
 
           Verify with:
           \`\`\`
-          minisign -Vm Image -p release.pub
+          # Fetch the canonical public key
+          curl -O https://raw.githubusercontent.com/pocketforge-os/infra/main/trust/minisign.pub
+          # Verify signatures
+          minisign -Vm Image -p minisign.pub
+          minisign -Vm pocketforge_tsp.dtb -p minisign.pub
+          minisign -Vm SHA256SUMS -p minisign.pub
+          # Verify hashes
           sha256sum -c SHA256SUMS
-          \`\`\`" \
+          \`\`\`
+          Public key fingerprint: \`C958F0F49AE8C528\`" \
             "$STAGING"/Image \
             "$STAGING"/pocketforge_tsp.dtb \
             "$STAGING"/modules-"${TAG}".tar.xz \
