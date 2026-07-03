@@ -11,6 +11,8 @@
 #
 .*
 !.github/
+!.claude/
+!.gitignore
 *.o
 *.o.*
 *.a
