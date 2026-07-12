@@ -11,6 +11,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/fb.h>
+#include <linux/delay.h>
 #include <linux/memblock.h>
 #if defined(SUPPORT_EDP)
 #include "de/disp_edp.h"
@@ -2345,6 +2346,36 @@ static s32 display_fb_request(u32 fb_id, struct disp_fb_create_info *fb_para)
 			}
 #endif
 #if defined(CONFIG_SUNXI_DISP2_FB_HW_ROTATION_SUPPORT)
+			/*
+			 * Bounded wait for g2d_probe to complete so fb rotation
+			 * is created NOW at fb0 registration — not lazily on the
+			 * first fb pan by a userspace producer (dev_fb.c:750-758).
+			 *
+			 * Without this wait, u-boot's bootlogo pixels (copied
+			 * into fb0 by Fb_map_kernel_logo above) are displayed
+			 * WITHOUT the DTS-configured 270° rotation until userspace
+			 * pans the fb — visible as a ~90° orientation flip during
+			 * the boot splash window (tsp-myp1.5.1).
+			 *
+			 * On the a133 target the measured gap between fb0
+			 * registration ([1.568] display_fb_request) and g2d
+			 * probe ([1.741] G2D: Module initialized) is ~173ms, so
+			 * a 500ms worst-case cap is comfortable; the poll returns
+			 * the instant g2d is ready. If g2d still isn't ready by
+			 * the cap, we fall through to the existing lazy-retry
+			 * defer path.
+			 */
+			{
+				int wait_ms = 0;
+
+				while (!g2d_is_ready() && wait_ms < 500) {
+					usleep_range(1000, 2000);
+					wait_ms++;
+				}
+				if (wait_ms > 0)
+					__inf("dev_fb: waited %dms for g2d before fb%d rot create\n",
+					      wait_ms, fb_id);
+			}
 			g_fbi.fb_rot[fb_id] = fb_g2d_rot_create(info, fb_id, &config);
 			if (g_fbi.fb_rot[fb_id])
 				g_fbi.fb_rot[fb_id]->apply(g_fbi.fb_rot[fb_id], &config);
