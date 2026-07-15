@@ -107,6 +107,57 @@ static int sunxi_clk_is_lock(struct sunxi_clk_factors *factor)
 	return 0;
 }
 
+/*
+ * sun50iw10 cold-lock recovery.
+ *
+ * The vendor sun50iw10 clk driver deliberately never sets a PLL's master
+ * enable bit (bit31) at runtime -- it only toggles the per-PLL output gate
+ * (OUT_EN, bit27) and relies on the bootloader (boot0) having set bit31 +
+ * factors + waited for lock for every PLL at boot (see the "enable pll
+ * enable bit(bit31) in boot" note in clk-sun50iw10.c). Our owned mainline
+ * u-boot only pre-locks the PLLs on the critical boot path (PERIPH0/1 for
+ * MMC), so PLLs such as pll_gpu / pll_video0 / pll_audiox4 reach the kernel
+ * with bit31 clear; the driver then sets OUT_EN + factors but never bit31,
+ * the VCO never runs, and the lock poll times out ("wait lock timeout") --
+ * which blocks GPU, display and audio bring-up on our owned boot chain.
+ *
+ * Recover exactly the way boot0/u-boot do: set the master enable bit and
+ * re-poll, with a brief disable/re-enable "kick" to retrigger a fresh lock
+ * (the same technique the vendor already ships for CONFIG_ARCH_SUN8IW12P1).
+ * This runs ONLY after the normal lock poll has already timed out, so PLLs
+ * the bootloader did enable -- which lock on the first poll -- are never
+ * touched, and the vendor's "don't glitch bit31 on a running PLL" concern
+ * does not apply here (a timed-out PLL is by definition not running).
+ */
+#define SUNXI_PLL_MASTER_EN_BIT		31
+#define SUNXI_PLL_COLD_LOCK_RETRIES	5
+static int sunxi_clk_cold_lock_recover(struct sunxi_clk_factors *factor)
+{
+	unsigned long reg;
+	int i;
+
+	for (i = 0; i < SUNXI_PLL_COLD_LOCK_RETRIES; i++) {
+		/* set the PLL master enable bit the vendor driver leaves alone */
+		reg = factor_readl(factor, factor->reg);
+		reg = SET_BITS(SUNXI_PLL_MASTER_EN_BIT, 1, reg, 1);
+		factor_writel(factor, reg, factor->reg);
+		udelay(1);
+
+		if (sunxi_clk_is_lock(factor) == 0)
+			return 0;
+
+		/* kick: drop then raise the master enable to force a fresh lock */
+		reg = SET_BITS(SUNXI_PLL_MASTER_EN_BIT, 1, reg, 0);
+		factor_writel(factor, reg, factor->reg);
+		udelay(1);
+		reg = SET_BITS(SUNXI_PLL_MASTER_EN_BIT, 1, reg, 1);
+		factor_writel(factor, reg, factor->reg);
+		udelay(1);
+	}
+
+	return sunxi_clk_is_lock(factor);
+}
+
 #ifndef CONFIG_ARCH_SUN8IW12P1
 static int sunxi_clk_fators_enable(struct clk_hw *hw)
 {
@@ -156,7 +207,7 @@ enable_sdm:
 
 	factor_writel(factor, reg, factor->reg);
 
-	if (sunxi_clk_is_lock(factor)) {
+	if (sunxi_clk_is_lock(factor) && sunxi_clk_cold_lock_recover(factor)) {
 		if (factor->lock)
 			spin_unlock_irqrestore(factor->lock, flags);
 		WARN(1, "clk %s wait lock timeout\n", clk_hw_get_name(&factor->hw));
@@ -450,7 +501,7 @@ static int sunxi_clk_factors_set_flat_facotrs(struct sunxi_clk_factors *factor,
 	}
 
 	/* 5. wait for PLL state stable */
-	if (sunxi_clk_is_lock(factor)) {
+	if (sunxi_clk_is_lock(factor) && sunxi_clk_cold_lock_recover(factor)) {
 		if (factor->lock)
 			spin_unlock_irqrestore(factor->lock, flags);
 		WARN(1, "clk %s wait lock timeout\n", clk_hw_get_name(&factor->hw));
@@ -530,7 +581,7 @@ static int sunxi_clk_factors_set_rate(struct clk_hw *hw, unsigned long rate, uns
 
 #ifndef CONFIG_SUNXI_CLK_DUMMY_DEBUG
 	if (GET_BITS(config->enshift, 1, reg)) {
-		if (sunxi_clk_is_lock(factor)) {
+		if (sunxi_clk_is_lock(factor) && sunxi_clk_cold_lock_recover(factor)) {
 			if (factor->lock)
 				spin_unlock_irqrestore(factor->lock, flags);
 			WARN(1, "clk %s wait lock timeout\n", clk_hw_get_name(&factor->hw));
